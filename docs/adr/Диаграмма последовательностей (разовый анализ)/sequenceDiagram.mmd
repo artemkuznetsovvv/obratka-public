@@ -1,0 +1,91 @@
+sequenceDiagram
+    participant User as Пользователь
+    participant FE as Frontend
+    participant API as Web API
+    participant RMQ as RabbitMQ
+    participant PG as Processing Gateway
+    participant Parser as Parser Service
+    participant S3 as MinIO (S3)
+    participant LLM as LLM Service
+
+    %% === 1. Запуск ===
+    User->>FE: Нажимает «Запустить анализ» (период, филиалы)
+    FE->>API: [HTTP] POST /companies/{companyId}/analyses
+    Note over API: Проверяет JWT + ownership,<br/>сохраняет запрос в webapi_db
+    API->>RMQ: [RabbitMQ] publish StartAnalysisCommand
+    API-->>FE: 202 { jobId }
+    FE-->>User: Redirect на progress screen
+
+    %% === 2. Progress polling (параллельно с pipeline) ===
+    loop Каждые 3 сек, пока status ∉ {completed, partial, failed}
+        FE->>API: [HTTP] GET /analyses/{jobId}/progress
+        API->>PG: [HTTP] GET /api/analyses/{jobId}/status
+        PG-->>API: { status, stages[], sources{} }
+        API-->>FE: { status, stages[], sources{} }
+    end
+
+    %% === 3. Сбор отзывов ===
+    RMQ->>PG: [RabbitMQ] consume StartAnalysisCommand
+    Note over PG: Создаёт запись в processing_db,<br/>status = pending
+
+    par Источник: 2GIS
+        PG->>Parser: [HTTP] POST /collection-tasks (2GIS)
+        Note over Parser: Сбор отзывов (Playwright / API)
+        Parser->>S3: [S3] PUT raw/2gis.json
+    and Источник: Яндекс
+        PG->>Parser: [HTTP] POST /collection-tasks (Яндекс)
+        Note over Parser: Сбор отзывов (Playwright / API)
+        Parser->>S3: [S3] PUT raw/yandex.json
+    and Источник: Google
+        PG->>Parser: [HTTP] POST /collection-tasks (Google)
+        Note over Parser: Сбор отзывов (Playwright / API)
+        Parser->>S3: [S3] PUT raw/google.json
+    end
+
+    Note over PG: status → collecting
+
+    loop Polling Parser, каждые 3–5 сек
+        PG->>Parser: [HTTP] GET /collection-tasks/{taskId}
+        Parser-->>PG: { status }
+    end
+
+    PG->>S3: [S3] GET raw/{source}.json
+    Note over PG: Сохраняет отзывы в processing_db
+
+    %% === 4. Подготовка и отправка в LLM ===
+    Note over PG: status → language_detection,<br/>выполняет языковую классификацию
+    PG->>S3: [S3] PUT input.json
+    PG->>RMQ: [RabbitMQ] publish LLM-запрос { payload_url }
+    Note over PG: status → sent_to_llm<br/>(claim-check паттерн)
+
+    %% === 5. Обработка LLM (внешний сервис) ===
+    RMQ->>LLM: [RabbitMQ] consume LLM-запрос
+    LLM->>S3: [S3] GET input.json
+    Note over LLM: Обработка: спам, фейки,<br/>тональность, темы, рекомендации
+    LLM->>S3: [S3] PUT output.json
+    LLM->>RMQ: [RabbitMQ] publish LLM-ответ { result_url }
+
+    %% === 6. Сохранение результатов LLM ===
+    RMQ->>PG: [RabbitMQ] consume LLM-ответ
+    PG->>S3: [S3] GET output.json
+    Note over PG: Сохраняет LLM-результаты в processing_db
+    Note over PG: status → computing_aggregates
+    PG->>RMQ: [RabbitMQ] publish AnalysisCompletedEvent
+
+    %% === 7. Агрегация (Web API, Analytics-модуль) ===
+    RMQ->>API: [RabbitMQ] consume AnalysisCompletedEvent
+    Note over API: [Cross-DB read] Читает отзывы +<br/>LLM-результаты из processing_db
+    Note over API: Записывает агрегаты в webapi_db<br/>(snapshots, timeseries, topics)
+    API->>RMQ: [RabbitMQ] publish AggregatesReadyEvent
+
+    %% === 8. Финализация статуса ===
+    RMQ->>PG: [RabbitMQ] consume AggregatesReadyEvent
+    Note over PG: status → completed<br/>(или partial / failed)
+
+    %% === 9. Результат ===
+    Note over FE: Polling видит status = completed
+    FE-->>User: Redirect на дашборд
+    FE->>API: [HTTP] GET /companies/{companyId}/dashboard
+    Note over API: Читает агрегаты из webapi_db,<br/>возвращает JSON
+    API-->>FE: JSON с данными дашборда
+    FE-->>User: Дашборд с результатами анализа
