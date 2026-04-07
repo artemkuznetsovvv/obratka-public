@@ -1,0 +1,90 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Amazon.Runtime;
+using Amazon.S3;
+using Microsoft.EntityFrameworkCore;
+using ParserService.Core;
+using ParserService.Core.Models;
+using ParserService.Infrastructure.Browser;
+using ParserService.Infrastructure.Proxy;
+using ParserService.Infrastructure.RateLimiting;
+using ParserService.Infrastructure.Stealth;
+using ParserService.Infrastructure.Storage;
+using ParserService.Sources.GoogleMaps;
+using ParserService.Sources.TwoGis;
+using ParserService.Sources.YandexMaps;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// --- SQLite + EF Core ---
+builder.Services.AddDbContext<ParserDbContext>(options =>
+    options.UseSqlite(builder.Configuration.GetConnectionString("TasksDb")
+        ?? "Data Source=tasks.db"));
+
+// --- AWS S3 (MinIO compatible) ---
+builder.Services.AddSingleton<IAmazonS3>(_ =>
+{
+    var config = new AmazonS3Config
+    {
+        ServiceURL = builder.Configuration["S3:Endpoint"] ?? "http://localhost:9000",
+        ForcePathStyle = true
+    };
+    var credentials = new BasicAWSCredentials(
+        builder.Configuration["S3:AccessKey"] ?? "minioadmin",
+        builder.Configuration["S3:SecretKey"] ?? "minioadmin");
+    return new AmazonS3Client(credentials, config);
+});
+
+// --- Infrastructure ---
+builder.Services.AddSingleton<IS3ResultStorage, S3ResultStorage>();
+builder.Services.AddSingleton<IBrowserPool, StubBrowserPool>();
+builder.Services.AddSingleton<IProxyRotator, StubProxyRotator>();
+builder.Services.AddSingleton<IStealthConfigurator, StubStealthConfigurator>();
+builder.Services.AddSingleton<IPerSourceRateLimiter, StubPerSourceRateLimiter>();
+
+// --- Core ---
+builder.Services.AddScoped<ITaskRepository, SqliteTaskRepository>();
+builder.Services.AddScoped<CollectionTaskOrchestrator>();
+
+// --- Plugins ---
+builder.Services.AddSingleton<IReviewSourcePlugin, TwoGisPlugin>();
+builder.Services.AddSingleton<IReviewSourcePlugin, YandexMapsPlugin>();
+builder.Services.AddSingleton<IReviewSourcePlugin, GoogleMapsPlugin>();
+
+// --- Background task processing ---
+builder.Services.AddSingleton<TaskQueue>();
+builder.Services.AddHostedService<CollectionTaskBackgroundService>();
+
+// --- Controllers + JSON ---
+builder.Services.AddControllers()
+    .AddJsonOptions(o =>
+    {
+        o.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
+        o.JsonSerializerOptions.Converters.Add(new SourceTypeJsonConverter());
+        o.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+    });
+
+builder.Services.AddOpenApi();
+
+var app = builder.Build();
+
+// --- Auto-migrate SQLite on startup ---
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<ParserDbContext>();
+    if (db.Database.GetPendingMigrations().Any())
+        await db.Database.MigrateAsync();
+    else
+        await db.Database.EnsureCreatedAsync();
+}
+
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+}
+
+app.MapControllers();
+
+await app.RunAsync();
+
+public partial class Program { }
