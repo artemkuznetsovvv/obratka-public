@@ -25,4 +25,8 @@
     <ProjectReference Include="..\..\src\ParserService\ParserService.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="YandexMaps\Fixtures\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

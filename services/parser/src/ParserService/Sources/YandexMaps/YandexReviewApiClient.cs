@@ -4,7 +4,7 @@ using Microsoft.Playwright;
 
 namespace ParserService.Sources.YandexMaps;
 
-internal sealed class YandexReviewApiClient
+internal class YandexReviewApiClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -18,7 +18,7 @@ internal sealed class YandexReviewApiClient
         _logger = logger;
     }
 
-    public async Task<YandexReviewsResponse> FetchReviewsPageAsync(
+    public virtual async Task<YandexReviewsResponse> FetchReviewsPageAsync(
         YandexSession session,
         string businessId,
         int page,
