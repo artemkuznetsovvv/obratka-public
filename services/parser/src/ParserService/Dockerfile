@@ -8,10 +8,10 @@ RUN dotnet publish src/ParserService/ParserService.csproj -c Release -o /app/pub
 FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS runtime
 WORKDIR /app
 
-# Playwright dependencies (uncomment when plugins need browser)
-# RUN apt-get update && apt-get install -y wget && \
-#     dotnet tool install --global Microsoft.Playwright.CLI && \
-#     playwright install chromium --with-deps
+# Playwright: install Chromium + system dependencies
+RUN dotnet tool install --global Microsoft.Playwright.CLI && \
+    export PATH="$PATH:/root/.dotnet/tools" && \
+    playwright install chromium --with-deps
 
 RUN mkdir -p /data
 

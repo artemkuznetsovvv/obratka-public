@@ -14,6 +14,8 @@ using ParserService.Sources.GoogleMaps;
 using ParserService.Sources.TwoGis;
 using ParserService.Sources.YandexMaps;
 
+// ReSharper disable RedundantUsingDirective
+
 var builder = WebApplication.CreateBuilder(args);
 
 // --- SQLite + EF Core ---
@@ -36,11 +38,22 @@ builder.Services.AddSingleton<IAmazonS3>(_ =>
 });
 
 // --- Infrastructure ---
-builder.Services.AddSingleton<IS3ResultStorage, S3ResultStorage>();
-builder.Services.AddSingleton<IBrowserPool, StubBrowserPool>();
-builder.Services.AddSingleton<IProxyRotator, StubProxyRotator>();
-builder.Services.AddSingleton<IStealthConfigurator, StubStealthConfigurator>();
-builder.Services.AddSingleton<IPerSourceRateLimiter, StubPerSourceRateLimiter>();
+if (builder.Environment.IsDevelopment())
+    builder.Services.AddSingleton<IS3ResultStorage, LocalFileResultStorage>();
+else
+    builder.Services.AddSingleton<IS3ResultStorage, S3ResultStorage>();
+builder.Services.Configure<BrowserPoolOptions>(
+    builder.Configuration.GetSection(BrowserPoolOptions.SectionName));
+builder.Services.AddSingleton<IBrowserPool, PlaywrightBrowserPool>();
+builder.Services.Configure<ProxyOptions>(
+    builder.Configuration.GetSection(ProxyOptions.SectionName));
+builder.Services.AddSingleton<IProxyRotator, ConfigProxyRotator>();
+builder.Services.AddSingleton<IStealthConfigurator, PlaywrightStealthConfigurator>();
+builder.Services.AddSingleton<IPerSourceRateLimiter, PerSourceRateLimiter>();
+
+// --- YandexMaps configuration ---
+builder.Services.Configure<YandexMapsOptions>(
+    builder.Configuration.GetSection(YandexMapsOptions.SectionName));
 
 // --- Core ---
 builder.Services.AddScoped<ITaskRepository, SqliteTaskRepository>();
