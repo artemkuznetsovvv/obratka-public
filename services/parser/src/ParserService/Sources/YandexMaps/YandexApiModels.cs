@@ -2,6 +2,12 @@ using System.Text.Json.Serialization;
 
 namespace ParserService.Sources.YandexMaps;
 
+/// <summary>
+/// Top-level wrapper — real API response is { "data": { "reviews": [...] } }
+/// </summary>
+internal record YandexFetchReviewsRoot(
+    [property: JsonPropertyName("data")] YandexReviewsResponse? Data);
+
 internal record YandexReviewsResponse(
     [property: JsonPropertyName("reviews")] List<YandexReviewDto>? Reviews,
     [property: JsonPropertyName("totalCount")] int? TotalCount,
@@ -10,7 +16,7 @@ internal record YandexReviewsResponse(
 internal record YandexReviewDto(
     [property: JsonPropertyName("reviewId")] string? ReviewId,
     [property: JsonPropertyName("text")] string? Text,
-    [property: JsonPropertyName("updatedTime")] long? UpdatedTime,
+    [property: JsonPropertyName("updatedTime")] string? UpdatedTime,
     [property: JsonPropertyName("rating")] int? Rating,
     [property: JsonPropertyName("author")] YandexAuthorDto? Author);
 

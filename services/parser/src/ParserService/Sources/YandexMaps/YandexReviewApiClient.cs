@@ -6,7 +6,6 @@ namespace ParserService.Sources.YandexMaps;
 
 internal sealed class YandexReviewApiClient
 {
-    private const string BaseUrl = "https://yandex.ru/maps/api/business/fetchReviews";
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -27,32 +26,43 @@ internal sealed class YandexReviewApiClient
         string ranking,
         CancellationToken ct)
     {
-        var queryParams = new OrderedDictionary<string, string>
+        // Build params in alphabetical order (critical for hash computation)
+        var queryParams = new List<KeyValuePair<string, string>>
         {
-            ["businessId"] = businessId,
-            ["csrfToken"] = session.CsrfToken,
-            ["page"] = page.ToString(),
-            ["pageSize"] = pageSize.ToString(),
-            ["ranking"] = ranking,
-            ["sessionId"] = session.SessionId
+            new("ajax", "1"),
+            new("businessId", businessId),
+            new("csrfToken", session.CsrfToken),
+            new("locale", session.Locale),
+            new("page", page.ToString()),
+            new("pageSize", pageSize.ToString()),
+            new("ranking", ranking),
         };
 
+        if (session.RequestId is not null)
+            queryParams.Add(new("reqId", session.RequestId));
+
+        queryParams.Add(new("sessionId", session.SessionId));
+
         var s = Djb2Hasher.ComputeS(queryParams);
-        queryParams["s"] = s;
+        queryParams.Add(new("s", s));
+
+        // Sort to ensure alphabetical order in URL
+        queryParams.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
 
         var queryString = string.Join("&",
             queryParams.Select(kv => $"{WebUtility.UrlEncode(kv.Key)}={WebUtility.UrlEncode(kv.Value)}"));
-        var url = $"{BaseUrl}?{queryString}";
+        var url = $"{session.ApiBaseUrl}/maps/api/business/fetchReviews?{queryString}";
 
         _logger.LogDebug("Fetching reviews: businessId={BusinessId}, page={Page}, ranking={Ranking}",
             businessId, page, ranking);
+        _logger.LogDebug("API URL: {Url}", url);
 
         var apiPage = await session.BrowserContext.NewPageAsync();
         try
         {
             await apiPage.SetExtraHTTPHeadersAsync(new Dictionary<string, string>
             {
-                ["Referer"] = $"https://yandex.ru/maps/org/{businessId}/reviews/",
+                ["Referer"] = $"{session.ApiBaseUrl}/maps/org/{businessId}/reviews/",
                 ["Accept"] = "application/json",
                 ["X-Requested-With"] = "XMLHttpRequest"
             });
@@ -75,7 +85,8 @@ internal sealed class YandexReviewApiClient
                 throw new HttpRequestException($"Yandex API returned status {status}");
             }
 
-            var result = JsonSerializer.Deserialize<YandexReviewsResponse>(body, JsonOptions)
+            var root = JsonSerializer.Deserialize<YandexFetchReviewsRoot>(body, JsonOptions);
+            var result = root?.Data
                 ?? throw new JsonException("Failed to deserialize Yandex reviews response");
 
             _logger.LogDebug("Got {Count} reviews on page {Page}", result.Reviews?.Count ?? 0, page);
@@ -86,29 +97,4 @@ internal sealed class YandexReviewApiClient
             await apiPage.CloseAsync();
         }
     }
-}
-
-internal sealed class OrderedDictionary<TKey, TValue> : Dictionary<TKey, TValue>
-    where TKey : notnull
-{
-    private readonly List<TKey> _keys = [];
-
-    public new TValue this[TKey key]
-    {
-        get => base[key];
-        set
-        {
-            if (!ContainsKey(key))
-                _keys.Add(key);
-            base[key] = value;
-        }
-    }
-
-    public new void Add(TKey key, TValue value)
-    {
-        base.Add(key, value);
-        _keys.Add(key);
-    }
-
-    public new IEnumerable<TValue> Values => _keys.Select(k => base[k]);
 }

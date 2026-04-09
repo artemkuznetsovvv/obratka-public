@@ -1,8 +1,16 @@
 namespace ParserService.Sources.YandexMaps;
 
+public enum YandexCollectionMode
+{
+    Api,
+    BrowserScroll
+}
+
 public class YandexMapsOptions
 {
     public const string SectionName = "YandexMaps";
+
+    public YandexCollectionMode CollectionMode { get; set; } = YandexCollectionMode.BrowserScroll;
 
     public int PageSize { get; set; } = 50;
     public int MaxPages { get; set; } = 12;
@@ -23,4 +31,15 @@ public class YandexMapsOptions
     /// Reduces the chance of triggering SmartCaptcha.
     /// </summary>
     public bool WarmUpSession { get; set; } = true;
+
+    /// <summary>
+    /// Maximum scroll/click iterations in BrowserScroll mode.
+    /// </summary>
+    public int MaxScrollAttempts { get; set; } = 50;
+
+    /// <summary>
+    /// Navigation timeout in milliseconds for page.GotoAsync.
+    /// Increase for slow proxies or debugging (e.g. 180000 = 3 min).
+    /// </summary>
+    public int NavigationTimeoutMs { get; set; } = 60_000;
 }

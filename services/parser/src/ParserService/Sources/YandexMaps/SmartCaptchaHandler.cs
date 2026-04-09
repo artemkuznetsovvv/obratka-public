@@ -34,7 +34,7 @@ internal sealed partial class SmartCaptchaHandler
     /// Attempts to solve the captcha on the current page.
     /// Returns true if solved and page navigated away from captcha.
     /// </summary>
-    public async Task<bool> TrySolveCaptchaAsync(IPage page, CancellationToken ct)
+    public async Task<bool> TrySolveCaptchaAsync(IPage page, bool headful, CancellationToken ct)
     {
         _logger.LogWarning("SmartCaptcha detected, attempting to solve...");
 
@@ -47,7 +47,20 @@ internal sealed partial class SmartCaptchaHandler
             return true;
         }
 
-        // Step 2: If we have a captcha service key, try the external solver
+        // Step 2: If headful — wait for manual solving (user sees the browser window)
+        if (headful)
+        {
+            _logger.LogWarning(">>> Captcha requires manual solving. Solve it in the browser window. Waiting up to 120 seconds...");
+
+            solved = await WaitForManualSolveAsync(page, timeoutSeconds: 120, ct);
+            if (solved)
+            {
+                _logger.LogInformation("SmartCaptcha solved manually by user");
+                return true;
+            }
+        }
+
+        // Step 3: If we have a captcha service key, try the external solver
         if (!string.IsNullOrEmpty(_options.CaptchaSolverApiKey))
         {
             solved = await TrySolveViaExternalServiceAsync(page, ct);
@@ -59,6 +72,31 @@ internal sealed partial class SmartCaptchaHandler
         }
 
         _logger.LogError("Failed to solve SmartCaptcha");
+        return false;
+    }
+
+    private async Task<bool> WaitForManualSolveAsync(IPage page, int timeoutSeconds, CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            ct.ThrowIfCancellationRequested();
+            await Task.Delay(2000, ct);
+
+            try
+            {
+                var html = await page.ContentAsync();
+                if (!IsCaptchaPage(html))
+                    return true;
+            }
+            catch
+            {
+                // Page might be navigating — ignore and retry
+            }
+        }
+
+        _logger.LogWarning("Manual captcha solve timed out after {Timeout}s", timeoutSeconds);
         return false;
     }
 

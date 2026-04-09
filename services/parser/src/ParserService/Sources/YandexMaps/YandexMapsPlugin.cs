@@ -18,6 +18,7 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
     private readonly IStealthConfigurator _stealthConfigurator;
     private readonly IPerSourceRateLimiter _rateLimiter;
     private readonly YandexMapsOptions _options;
+    private readonly BrowserPoolOptions _browserOptions;
     private readonly ILogger<YandexMapsPlugin> _logger;
 
     public YandexMapsPlugin(
@@ -26,6 +27,7 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
         IStealthConfigurator stealthConfigurator,
         IPerSourceRateLimiter rateLimiter,
         IOptions<YandexMapsOptions> options,
+        IOptions<BrowserPoolOptions> browserOptions,
         ILogger<YandexMapsPlugin> logger)
     {
         _browserPool = browserPool;
@@ -33,6 +35,7 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
         _stealthConfigurator = stealthConfigurator;
         _rateLimiter = rateLimiter;
         _options = options.Value;
+        _browserOptions = browserOptions.Value;
         _logger = logger;
     }
 
@@ -65,13 +68,25 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
             {
                 try
                 {
-                    await using var session = await YandexSession.CreateAsync(
-                        browserContext, orgUrl, _logger, _options, ct);
+                    var isHeadful = !_browserOptions.Headless;
 
-                    var apiClient = new YandexReviewApiClient(_logger);
-                    var collector = new YandexReviewCollector(apiClient, _options, _logger);
+                    if (_options.CollectionMode == YandexCollectionMode.BrowserScroll)
+                    {
+                        var scrollCollector = new BrowserScrollCollector(_options, _logger);
+                        reviews = await scrollCollector.CollectAllReviewsAsync(
+                            browserContext, orgUrl, branch, period, isHeadful, ct);
+                    }
+                    else
+                    {
+                        await using var session = await YandexSession.CreateAsync(
+                            browserContext, orgUrl, _logger, _options, ct, isHeadful);
 
-                    reviews = await collector.CollectAllReviewsAsync(session, branch, period, ct);
+                        var apiClient = new YandexReviewApiClient(_logger);
+                        var collector = new YandexReviewCollector(apiClient, _options, _logger);
+
+                        reviews = await collector.CollectAllReviewsAsync(session, branch, period, ct);
+                    }
+
                     break;
                 }
                 catch (Exception ex) when (attempt < _options.MaxRetries && IsTransient(ex))

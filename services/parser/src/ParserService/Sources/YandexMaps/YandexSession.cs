@@ -17,17 +17,26 @@ internal sealed partial class YandexSession : IAsyncDisposable
 {
     public string CsrfToken { get; }
     public string SessionId { get; }
+    public string ApiBaseUrl { get; }
+    public string? RequestId { get; }
+    public string Locale { get; }
     public IReadOnlyList<BrowserContextCookiesResult> Cookies { get; }
     public IBrowserContext BrowserContext { get; }
 
     private YandexSession(
         string csrfToken,
         string sessionId,
+        string apiBaseUrl,
+        string? requestId,
+        string locale,
         IReadOnlyList<BrowserContextCookiesResult> cookies,
         IBrowserContext browserContext)
     {
         CsrfToken = csrfToken;
         SessionId = sessionId;
+        ApiBaseUrl = apiBaseUrl;
+        RequestId = requestId;
+        Locale = locale;
         Cookies = cookies;
         BrowserContext = browserContext;
     }
@@ -37,7 +46,8 @@ internal sealed partial class YandexSession : IAsyncDisposable
         string organizationUrl,
         ILogger logger,
         YandexMapsOptions options,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool headful = false)
     {
         var page = await context.NewPageAsync();
 
@@ -49,23 +59,31 @@ internal sealed partial class YandexSession : IAsyncDisposable
                 await WarmUpAsync(page, logger, ct);
             }
 
-            // --- Step 2: Intercept csrfToken from XHR ---
+            // --- Step 2: Intercept params from XHR ---
             string? interceptedCsrfToken = null;
-            await page.RouteAsync("**/*", async route =>
-            {
-                var url = route.Request.Url;
+            string? interceptedSessionId = null;
+            string? interceptedReqId = null;
+            string? interceptedLocale = null;
+            string? interceptedApiBaseUrl = null;
 
-                if (url.Contains("csrfToken=") && interceptedCsrfToken is null)
+            await page.RouteAsync("**/maps/api/**", async route =>
+            {
+                try
                 {
-                    var uri = new Uri(url);
-                    var queryParams = System.Web.HttpUtility.ParseQueryString(uri.Query);
-                    var token = queryParams["csrfToken"];
-                    if (!string.IsNullOrEmpty(token))
-                    {
-                        interceptedCsrfToken = token;
-                        logger.LogDebug("Intercepted csrfToken from request: {Url}", url);
-                    }
+                    var uri = new Uri(route.Request.Url);
+                    var qp = System.Web.HttpUtility.ParseQueryString(uri.Query);
+
+                    interceptedCsrfToken ??= qp["csrfToken"];
+                    interceptedSessionId ??= qp["sessionId"];
+                    interceptedReqId ??= qp["reqId"];
+                    interceptedLocale ??= qp["locale"];
+                    interceptedApiBaseUrl ??= $"{uri.Scheme}://{uri.Host}";
+
+                    if (interceptedCsrfToken is not null)
+                        logger.LogDebug("Intercepted params from API request: csrf={HasCsrf}, sid={HasSid}",
+                            interceptedCsrfToken is not null, interceptedSessionId is not null);
                 }
+                catch { /* ignore URI parsing errors */ }
 
                 await route.ContinueAsync();
             });
@@ -87,7 +105,7 @@ internal sealed partial class YandexSession : IAsyncDisposable
                 logger.LogWarning("SmartCaptcha detected on org page");
 
                 var captchaHandler = new SmartCaptchaHandler(logger, options);
-                var solved = await captchaHandler.TrySolveCaptchaAsync(page, ct);
+                var solved = await captchaHandler.TrySolveCaptchaAsync(page, headful, ct);
 
                 if (!solved)
                     throw new SmartCaptchaException(
@@ -102,20 +120,25 @@ internal sealed partial class YandexSession : IAsyncDisposable
                         "SmartCaptcha appeared again after solving. IP is likely flagged.");
             }
 
-            // --- Step 5: Extract csrfToken ---
+            // --- Step 5: Extract csrfToken + session params ---
             var csrfToken = ExtractCsrfToken(html);
+            var sessionId = ExtractFromScript(html, SessionIdInScriptRegex());
+            var reqId = ExtractFromScript(html, ReqIdInScriptRegex());
 
-            if (csrfToken is null)
+            // Try JS evaluation for missing params
+            if (csrfToken is null || sessionId is null)
             {
-                logger.LogDebug("config-view script not found, trying JS evaluation");
-                csrfToken = await TryExtractCsrfViaJsAsync(page, logger);
+                logger.LogDebug("Trying JS evaluation for page params");
+                var jsParams = await TryExtractParamsViaJsAsync(page, logger);
+                csrfToken ??= jsParams.CsrfToken;
+                sessionId ??= jsParams.SessionId;
+                reqId ??= jsParams.ReqId;
             }
 
-            if (csrfToken is null && interceptedCsrfToken is not null)
-            {
-                logger.LogDebug("Using csrfToken intercepted from network request");
-                csrfToken = interceptedCsrfToken;
-            }
+            // Use intercepted values as fallback
+            csrfToken ??= interceptedCsrfToken;
+            sessionId ??= interceptedSessionId;
+            reqId ??= interceptedReqId;
 
             if (csrfToken is null)
             {
@@ -124,18 +147,24 @@ internal sealed partial class YandexSession : IAsyncDisposable
                 throw new InvalidOperationException("Failed to extract csrfToken from page");
             }
 
-            // --- Step 6: Extract session info ---
+            if (string.IsNullOrEmpty(sessionId))
+            {
+                logger.LogWarning("Could not extract sessionId from page context, generating fallback");
+                sessionId = GenerateSessionId();
+            }
+
+            // --- Step 6: Determine API domain & locale ---
             var cookies = await context.CookiesAsync();
 
-            var sessionId = cookies
-                .FirstOrDefault(c => c.Name == "Session_id")?.Value
-                ?? cookies.FirstOrDefault(c => c.Name == "i")?.Value
-                ?? "";
+            var pageUri = new Uri(page.Url);
+            var apiBaseUrl = interceptedApiBaseUrl ?? $"{pageUri.Scheme}://{pageUri.Host}";
+            var locale = interceptedLocale ?? "ru_RU";
 
-            logger.LogDebug("Session created: csrfToken length={CsrfLen}, sessionId length={SidLen}",
-                csrfToken.Length, sessionId.Length);
+            logger.LogDebug(
+                "Session created: csrfToken length={CsrfLen}, sessionId={SessionId}, apiBaseUrl={ApiBaseUrl}, reqId={ReqId}, locale={Locale}",
+                csrfToken.Length, sessionId, apiBaseUrl, reqId ?? "(none)", locale);
 
-            return new YandexSession(csrfToken, sessionId, cookies, context);
+            return new YandexSession(csrfToken, sessionId, apiBaseUrl, reqId, locale, cookies, context);
         }
         finally
         {
@@ -147,7 +176,7 @@ internal sealed partial class YandexSession : IAsyncDisposable
     /// Warms up the browser session by visiting yandex.ru first.
     /// This establishes cookies and trust before navigating to Maps.
     /// </summary>
-    private static async Task WarmUpAsync(IPage page, ILogger logger, CancellationToken ct)
+    internal static async Task WarmUpAsync(IPage page, ILogger logger, CancellationToken ct)
     {
         logger.LogDebug("Warming up session — visiting yandex.ru");
 
@@ -189,51 +218,73 @@ internal sealed partial class YandexSession : IAsyncDisposable
         }
     }
 
-    private static async Task<string?> TryExtractCsrfViaJsAsync(IPage page, ILogger logger)
+    private record PageParams(string? CsrfToken, string? SessionId, string? ReqId);
+
+    private static async Task<PageParams> TryExtractParamsViaJsAsync(IPage page, ILogger logger)
     {
         try
         {
-            var token = await page.EvaluateAsync<string?>("""
+            var result = await page.EvaluateAsync<System.Text.Json.JsonElement>("""
                 (function() {
-                    if (window.maps_config && window.maps_config.csrfToken)
-                        return window.maps_config.csrfToken;
+                    var r = {};
+
+                    function tryConfig(obj) {
+                        if (!obj) return;
+                        r.csrfToken = r.csrfToken || obj.csrfToken || null;
+                        r.sessionId = r.sessionId || obj.sessionId || null;
+                        r.reqId = r.reqId || obj.reqId || null;
+                    }
+
+                    if (window.maps_config) tryConfig(window.maps_config);
 
                     if (window.__PRELOADED_STATE__) {
                         var state = typeof window.__PRELOADED_STATE__ === 'string'
                             ? JSON.parse(window.__PRELOADED_STATE__)
                             : window.__PRELOADED_STATE__;
-                        if (state.csrfToken) return state.csrfToken;
-                        if (state.config && state.config.csrfToken) return state.config.csrfToken;
+                        tryConfig(state);
+                        if (state.config) tryConfig(state.config);
                     }
 
                     var scripts = document.querySelectorAll('script:not([src])');
                     for (var i = 0; i < scripts.length; i++) {
                         var text = scripts[i].textContent;
-                        if (text && text.indexOf('csrfToken') !== -1) {
-                            var match = text.match(/"csrfToken"\s*:\s*"([^"]+)"/);
-                            if (match) return match[1];
+                        if (!text) continue;
+                        if (!r.csrfToken) {
+                            var m = text.match(/"csrfToken"\s*:\s*"([^"]+)"/);
+                            if (m) r.csrfToken = m[1];
+                        }
+                        if (!r.sessionId) {
+                            var m = text.match(/"sessionId"\s*:\s*"([^"]+)"/);
+                            if (m) r.sessionId = m[1];
+                        }
+                        if (!r.reqId) {
+                            var m = text.match(/"reqId"\s*:\s*"([^"]+)"/);
+                            if (m) r.reqId = m[1];
                         }
                     }
 
                     var meta = document.querySelector('meta[name="csrf-token"]');
-                    if (meta) return meta.getAttribute('content');
+                    if (meta && !r.csrfToken) r.csrfToken = meta.getAttribute('content');
 
-                    return null;
+                    return r;
                 })()
             """);
 
-            if (!string.IsNullOrEmpty(token))
-            {
-                logger.LogDebug("Extracted csrfToken via JS evaluation");
-                return token;
-            }
+            var csrf = result.TryGetProperty("csrfToken", out var v1) ? v1.GetString() : null;
+            var sid = result.TryGetProperty("sessionId", out var v2) ? v2.GetString() : null;
+            var rid = result.TryGetProperty("reqId", out var v3) ? v3.GetString() : null;
+
+            if (csrf != null || sid != null)
+                logger.LogDebug("JS extraction: csrfToken={HasCsrf}, sessionId={HasSid}, reqId={HasReq}",
+                    csrf != null, sid != null, rid != null);
+
+            return new PageParams(csrf, sid, rid);
         }
         catch (Exception ex)
         {
-            logger.LogDebug(ex, "JS evaluation for csrfToken failed");
+            logger.LogDebug(ex, "JS evaluation for page params failed");
+            return new PageParams(null, null, null);
         }
-
-        return null;
     }
 
     internal static string? ExtractCsrfToken(string html)
@@ -258,6 +309,20 @@ internal sealed partial class YandexSession : IAsyncDisposable
         return string.Join("; ", Cookies.Select(c => $"{c.Name}={c.Value}"));
     }
 
+    private static string? ExtractFromScript(string html, Regex regex)
+    {
+        var match = regex.Match(html);
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    private static string GenerateSessionId()
+    {
+        var ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var r1 = Random.Shared.Next(100000, 999999);
+        var r2 = Random.Shared.NextInt64(1000000000000, 9999999999999);
+        return $"{ts}{r1}-{r2}-maps-front-production";
+    }
+
     [GeneratedRegex("""<script[^>]*class\s*=\s*["']config-view["'][^>]*>(.*?)</script>""", RegexOptions.Singleline)]
     private static partial Regex ConfigViewRegex();
 
@@ -266,6 +331,12 @@ internal sealed partial class YandexSession : IAsyncDisposable
 
     [GeneratedRegex("""<script[^>]*>(?:(?!</script>).)*?"csrfToken"\s*:\s*"([^"]+)"(?:(?!</script>).)*?</script>""", RegexOptions.Singleline)]
     private static partial Regex CsrfInScriptRegex();
+
+    [GeneratedRegex("""<script[^>]*>(?:(?!</script>).)*?"sessionId"\s*:\s*"([^"]+)"(?:(?!</script>).)*?</script>""", RegexOptions.Singleline)]
+    private static partial Regex SessionIdInScriptRegex();
+
+    [GeneratedRegex("""<script[^>]*>(?:(?!</script>).)*?"reqId"\s*:\s*"([^"]+)"(?:(?!</script>).)*?</script>""", RegexOptions.Singleline)]
+    private static partial Regex ReqIdInScriptRegex();
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

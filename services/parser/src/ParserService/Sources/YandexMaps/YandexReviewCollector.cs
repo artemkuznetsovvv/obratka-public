@@ -70,10 +70,11 @@ internal sealed class YandexReviewCollector
 
             foreach (var dto in response.Reviews)
             {
-                if (dto.ReviewId == null || dto.Rating == null || dto.UpdatedTime == null)
+                if (dto.ReviewId == null || dto.Rating == null || string.IsNullOrEmpty(dto.UpdatedTime))
                     continue;
 
-                var date = DateTimeOffset.FromUnixTimeSeconds(dto.UpdatedTime.Value);
+                if (!DateTimeOffset.TryParse(dto.UpdatedTime, out var date))
+                    continue;
 
                 if (date < period.From)
                 {

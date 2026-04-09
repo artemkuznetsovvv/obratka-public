@@ -10,9 +10,9 @@ internal static class Djb2Hasher
         return n;
     }
 
-    public static string ComputeS(IDictionary<string, string> queryParams)
+    public static string ComputeS(IReadOnlyList<KeyValuePair<string, string>> queryParams)
     {
-        var concatenated = string.Concat(queryParams.Values);
+        var concatenated = string.Concat(queryParams.Select(kv => kv.Value));
         return ComputeHash(concatenated).ToString();
     }
 }
