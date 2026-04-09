@@ -94,7 +94,10 @@ internal sealed class YandexReviewCollector
                     Text: dto.Text ?? "",
                     Date: date,
                     Stars: dto.Rating.Value,
-                    BranchId: branch.BranchId));
+                    BranchId: branch.BranchId,
+                    AuthorName: dto.Author?.Name,
+                    AuthorPublicId: dto.Author?.PublicId,
+                    TextLanguage: dto.TextLanguage));
             }
 
             if (reachedDateBound)

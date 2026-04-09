@@ -102,6 +102,7 @@ internal sealed class BrowserScrollCollector
 
             // --- Step 7: Scroll loop ---
             int consecutiveEmpty = 0;
+            const int maxConsecutiveEmpty = 5;
 
             for (int attempt = 0; attempt < _options.MaxScrollAttempts && hasMore && !reachedDateBound; attempt++)
             {
@@ -111,11 +112,18 @@ internal sealed class BrowserScrollCollector
 
                 await TriggerNextPageAsync(page, ct);
 
-                // Wait for response to arrive + human-like delay
-                var delay = Random.Shared.Next(
+                // Wait for intercepted response to arrive (poll queue with timeout)
+                // instead of a blind delay — prevents premature "empty" verdicts
+                var waitDeadline = DateTime.UtcNow.AddMilliseconds(_options.DelayBetweenPagesMaxMs * 2);
+                while (interceptedResponses.IsEmpty && DateTime.UtcNow < waitDeadline)
+                {
+                    await Task.Delay(300, ct);
+                }
+
+                // Human-like pause after response arrives
+                await Task.Delay(Random.Shared.Next(
                     _options.DelayBetweenPagesMinMs,
-                    _options.DelayBetweenPagesMaxMs + 1);
-                await Task.Delay(delay, ct);
+                    _options.DelayBetweenPagesMaxMs + 1), ct);
 
                 reachedDateBound = DrainQueue(interceptedResponses, reviews, seenIds, branch, period, ref hasMore);
 
@@ -125,9 +133,9 @@ internal sealed class BrowserScrollCollector
                     _logger.LogDebug("Scroll attempt {Attempt}: no new reviews (empty streak: {Streak})",
                         attempt + 1, consecutiveEmpty);
 
-                    if (consecutiveEmpty >= 3)
+                    if (consecutiveEmpty >= maxConsecutiveEmpty)
                     {
-                        _logger.LogDebug("3 consecutive empty scrolls, stopping");
+                        _logger.LogDebug("{Max} consecutive empty scrolls, stopping", maxConsecutiveEmpty);
                         break;
                     }
                 }
@@ -309,7 +317,10 @@ internal sealed class BrowserScrollCollector
                     Text: dto.Text ?? "",
                     Date: date,
                     Stars: dto.Rating.Value,
-                    BranchId: branch.BranchId));
+                    BranchId: branch.BranchId,
+                    AuthorName: dto.Author?.Name,
+                    AuthorPublicId: dto.Author?.PublicId,
+                    TextLanguage: dto.TextLanguage));
             }
         }
 

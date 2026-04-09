@@ -18,7 +18,8 @@ internal record YandexReviewDto(
     [property: JsonPropertyName("text")] string? Text,
     [property: JsonPropertyName("updatedTime")] string? UpdatedTime,
     [property: JsonPropertyName("rating")] int? Rating,
-    [property: JsonPropertyName("author")] YandexAuthorDto? Author);
+    [property: JsonPropertyName("author")] YandexAuthorDto? Author,
+    [property: JsonPropertyName("textLanguage")] string? TextLanguage);
 
 internal record YandexAuthorDto(
     [property: JsonPropertyName("name")] string? Name,

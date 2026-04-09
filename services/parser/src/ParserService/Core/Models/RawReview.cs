@@ -5,5 +5,8 @@ public record RawReview(
     string Text,
     DateTimeOffset Date,
     int Stars,
-    Guid BranchId
+    Guid BranchId,
+    string? AuthorName = null,
+    string? AuthorPublicId = null,
+    string? TextLanguage = null
 );
