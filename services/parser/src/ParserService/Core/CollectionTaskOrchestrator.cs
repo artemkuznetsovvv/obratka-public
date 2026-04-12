@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using ParserService.Api.Contracts;
 using ParserService.Core.Models;
+using ParserService.Infrastructure.RateLimiting;
 using ParserService.Infrastructure.Storage;
 
 namespace ParserService.Core;
@@ -11,6 +12,7 @@ public class CollectionTaskOrchestrator
     private readonly ITaskRepository _repository;
     private readonly IS3ResultStorage _s3;
     private readonly IEnumerable<IReviewSourcePlugin> _plugins;
+    private readonly IPerSourceRateLimiter _rateLimiter;
     private readonly TaskQueue _taskQueue;
     private readonly ILogger<CollectionTaskOrchestrator> _logger;
 
@@ -23,12 +25,14 @@ public class CollectionTaskOrchestrator
         ITaskRepository repository,
         IS3ResultStorage s3,
         IEnumerable<IReviewSourcePlugin> plugins,
+        IPerSourceRateLimiter rateLimiter,
         TaskQueue taskQueue,
         ILogger<CollectionTaskOrchestrator> logger)
     {
         _repository = repository;
         _s3 = s3;
         _plugins = plugins;
+        _rateLimiter = rateLimiter;
         _taskQueue = taskQueue;
         _logger = logger;
     }
@@ -110,18 +114,26 @@ public class CollectionTaskOrchestrator
 
             for (var i = 0; i < branches.Count; i++)
             {
-                var b = branches[i];
-                var target = new BranchTarget(b.BranchId, b.ExternalId, b.ExternalUrl);
-                var period = new DateRange(
-                    task.DateFrom ?? DateTimeOffset.MinValue,
-                    task.DateTo ?? DateTimeOffset.UtcNow);
+                await _rateLimiter.AcquireOrgSlotAsync(task.Source, ct);
+                try
+                {
+                    var b = branches[i];
+                    var target = new BranchTarget(b.BranchId, b.ExternalId, b.ExternalUrl);
+                    var period = new DateRange(
+                        task.DateFrom ?? DateTimeOffset.MinValue,
+                        task.DateTo ?? DateTimeOffset.UtcNow);
 
-                var reviews = await plugin.FetchReviewsAsync(target, period, ct);
-                allReviews.AddRange(reviews);
+                    var reviews = await plugin.FetchReviewsAsync(target, period, ct);
+                    allReviews.AddRange(reviews);
 
-                task.Progress = (double)(i + 1) / branches.Count * 100;
-                task.ReviewCount = allReviews.Count;
-                await _repository.UpdateAsync(task, ct);
+                    task.Progress = (double)(i + 1) / branches.Count * 100;
+                    task.ReviewCount = allReviews.Count;
+                    await _repository.UpdateAsync(task, ct);
+                }
+                finally
+                {
+                    await _rateLimiter.ReleaseOrgSlotAsync(task.Source, ct);
+                }
             }
 
             var result = new CollectionResult(

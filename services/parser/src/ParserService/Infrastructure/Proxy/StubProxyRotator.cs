@@ -22,4 +22,9 @@ public class StubProxyRotator : IProxyRotator
     {
         return Task.CompletedTask;
     }
+
+    public Task ReportFailureAsync(ProxyInfo proxy, ProxyFailureReason reason)
+    {
+        return Task.CompletedTask;
+    }
 }

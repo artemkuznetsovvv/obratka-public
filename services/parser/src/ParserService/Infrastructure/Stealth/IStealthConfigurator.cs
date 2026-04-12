@@ -1,6 +1,8 @@
+using Microsoft.Playwright;
+
 namespace ParserService.Infrastructure.Stealth;
 
 public interface IStealthConfigurator
 {
-    Task ApplyStealthAsync(object browserContext, CancellationToken ct);
+    Task ApplyStealthAsync(IBrowserContext browserContext, CancellationToken ct);
 }

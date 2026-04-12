@@ -49,13 +49,12 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
         await _rateLimiter.WaitAsync(SourceType.YandexMaps, ct);
 
         var proxy = await _proxyRotator.GetProxyAsync(SourceType.YandexMaps, ct);
-        var context = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
+        var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
 
         try
         {
-            await _stealthConfigurator.ApplyStealthAsync(context, ct);
+            await _stealthConfigurator.ApplyStealthAsync(browserContext, ct);
 
-            var browserContext = (IBrowserContext)context;
             var orgUrl = branch.ExternalUrl;
 
             if (string.IsNullOrEmpty(orgUrl))
@@ -95,6 +94,9 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
                     _logger.LogWarning(ex, "Attempt {Attempt}/{MaxRetries} failed for {BusinessId}, retrying...",
                         attempt, _options.MaxRetries, branch.ExternalId);
 
+                    if (proxy != null)
+                        await _proxyRotator.ReportFailureAsync(proxy, ClassifyFailure(ex));
+
                     var backoff = (int)Math.Pow(2, attempt) * 1000;
                     await Task.Delay(backoff, ct);
                 }
@@ -112,7 +114,7 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
         }
         finally
         {
-            await _browserPool.ReleaseAsync(context);
+            await _browserPool.ReleaseAsync(browserContext);
             if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
         }
     }
@@ -125,13 +127,12 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
         await _rateLimiter.WaitAsync(SourceType.YandexMaps, ct);
 
         var proxy = await _proxyRotator.GetProxyAsync(SourceType.YandexMaps, ct);
-        var context = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
+        var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
 
         try
         {
-            await _stealthConfigurator.ApplyStealthAsync(context, ct);
+            await _stealthConfigurator.ApplyStealthAsync(browserContext, ct);
 
-            var browserContext = (IBrowserContext)context;
             var page = await browserContext.NewPageAsync();
 
             try
@@ -162,7 +163,7 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
         }
         finally
         {
-            await _browserPool.ReleaseAsync(context);
+            await _browserPool.ReleaseAsync(browserContext);
             if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
         }
     }
@@ -254,6 +255,20 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
 
         return false;
     }
+
+    private static ProxyFailureReason ClassifyFailure(Exception ex) => ex switch
+    {
+        SmartCaptchaException => ProxyFailureReason.SmartCaptcha,
+        TimeoutException => ProxyFailureReason.Timeout,
+        HttpRequestException => ProxyFailureReason.ConnectionError,
+        PlaywrightException pe when pe.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase)
+            => ProxyFailureReason.Timeout,
+        PlaywrightException pe when pe.Message.Contains("net::", StringComparison.OrdinalIgnoreCase)
+            => ProxyFailureReason.ConnectionError,
+        _ when ex.Message.Contains("csrf", StringComparison.OrdinalIgnoreCase)
+            => ProxyFailureReason.CsrfError,
+        _ => ProxyFailureReason.ServerError
+    };
 
     [GeneratedRegex(@"/org/[^/]*/(\d+)/|/org/(\d+)")]
     private static partial Regex BusinessIdRegex();

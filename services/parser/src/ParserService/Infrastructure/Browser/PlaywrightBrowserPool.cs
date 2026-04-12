@@ -31,7 +31,7 @@ public class PlaywrightBrowserPool : IBrowserPool, IAsyncDisposable
         _options = options.Value;
     }
 
-    public async Task<object> AcquireAsync(BrowserAcquireOptions? options, CancellationToken ct)
+    public async Task<IBrowserContext> AcquireAsync(BrowserAcquireOptions? options, CancellationToken ct)
     {
         await _semaphore.WaitAsync(ct);
 
@@ -68,12 +68,11 @@ public class PlaywrightBrowserPool : IBrowserPool, IAsyncDisposable
         }
     }
 
-    public async Task ReleaseAsync(object context)
+    public async Task ReleaseAsync(IBrowserContext context)
     {
         try
         {
-            if (context is IBrowserContext browserContext)
-                await browserContext.CloseAsync();
+            await context.CloseAsync();
         }
         finally
         {

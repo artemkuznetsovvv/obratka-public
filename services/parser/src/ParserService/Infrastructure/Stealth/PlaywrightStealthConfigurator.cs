@@ -11,12 +11,9 @@ public class PlaywrightStealthConfigurator : IStealthConfigurator
         _logger = logger;
     }
 
-    public async Task ApplyStealthAsync(object browserContext, CancellationToken ct)
+    public async Task ApplyStealthAsync(IBrowserContext browserContext, CancellationToken ct)
     {
-        if (browserContext is not IBrowserContext context)
-            throw new ArgumentException("Expected IBrowserContext", nameof(browserContext));
-
-        await context.AddInitScriptAsync(StealthScript);
+        await browserContext.AddInitScriptAsync(StealthScript);
         _logger.LogDebug("Stealth patches applied to browser context");
     }
 

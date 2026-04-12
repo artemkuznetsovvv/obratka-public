@@ -49,6 +49,8 @@ builder.Services.Configure<ProxyOptions>(
     builder.Configuration.GetSection(ProxyOptions.SectionName));
 builder.Services.AddSingleton<IProxyRotator, ConfigProxyRotator>();
 builder.Services.AddSingleton<IStealthConfigurator, PlaywrightStealthConfigurator>();
+builder.Services.Configure<RateLimitingOptions>(
+    builder.Configuration.GetSection(RateLimitingOptions.SectionName));
 builder.Services.AddSingleton<IPerSourceRateLimiter, PerSourceRateLimiter>();
 
 // --- YandexMaps configuration ---
