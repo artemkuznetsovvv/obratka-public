@@ -53,9 +53,9 @@ internal class YandexReviewApiClient
             queryParams.Select(kv => $"{WebUtility.UrlEncode(kv.Key)}={WebUtility.UrlEncode(kv.Value)}"));
         var url = $"{session.ApiBaseUrl}/maps/api/business/fetchReviews?{queryString}";
 
-        _logger.LogDebug("Fetching reviews: businessId={BusinessId}, page={Page}, ranking={Ranking}",
-            businessId, page, ranking);
-        _logger.LogDebug("API URL: {Url}", url);
+        _logger.LogDebug("[ApiClient] Запрос отзывов: businessId={BusinessId}, стр.{Page}, сортировка={Ranking}, pageSize={PageSize}",
+            businessId, page, ranking, pageSize);
+        _logger.LogDebug("[ApiClient] URL: {Url}", url);
 
         var apiPage = await session.BrowserContext.NewPageAsync();
         try
@@ -67,6 +67,7 @@ internal class YandexReviewApiClient
                 ["X-Requested-With"] = "XMLHttpRequest"
             });
 
+            _logger.LogDebug("[ApiClient] Отправляю запрос (таймаут: 15с)...");
             var response = await apiPage.GotoAsync(url, new PageGotoOptions
             {
                 WaitUntil = WaitUntilState.Commit,
@@ -74,22 +75,35 @@ internal class YandexReviewApiClient
             });
 
             if (response == null)
+            {
+                _logger.LogError("[ApiClient] Ответ от Яндекс API = null");
                 throw new HttpRequestException("No response from Yandex API");
+            }
 
             var status = response.Status;
             var body = await response.TextAsync();
 
+            _logger.LogDebug("[ApiClient] Ответ: статус={Status}, размер={Length} байт", status, body.Length);
+
             if (status != 200)
             {
-                _logger.LogWarning("Yandex API returned status {Status}: {Body}", status, body[..Math.Min(body.Length, 500)]);
+                _logger.LogWarning("[ApiClient] Ошибка API, статус {Status}. Тело ответа: {Body}",
+                    status, body.Length > 500 ? body[..500] : body);
                 throw new HttpRequestException($"Yandex API returned status {status}");
             }
 
             var root = JsonSerializer.Deserialize<YandexFetchReviewsRoot>(body, JsonOptions);
-            var result = root?.Data
-                ?? throw new JsonException("Failed to deserialize Yandex reviews response");
+            var result = root?.Data;
 
-            _logger.LogDebug("Got {Count} reviews on page {Page}", result.Reviews?.Count ?? 0, page);
+            if (result == null)
+            {
+                _logger.LogError("[ApiClient] Не удалось десериализовать ответ. Тело (первые 500 симв.): {Body}",
+                    body.Length > 500 ? body[..500] : body);
+                throw new JsonException("Failed to deserialize Yandex reviews response");
+            }
+
+            _logger.LogDebug("[ApiClient] Стр.{Page}: {Count} отзывов, hasMore={HasMore}",
+                page, result.Reviews?.Count ?? 0, result.HasMore);
             return result;
         }
         finally

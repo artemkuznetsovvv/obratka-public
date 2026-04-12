@@ -4,6 +4,11 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using ParserService.Core;
+using ParserService.Core.Models;
+using ParserService.Infrastructure.Browser;
+using ParserService.Infrastructure.Proxy;
+using ParserService.Infrastructure.RateLimiting;
+using ParserService.Infrastructure.Stealth;
 using ParserService.Infrastructure.Storage;
 using ParserService.IntegrationTests.Helpers;
 
@@ -35,7 +40,31 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
             if (s3Descriptor != null) services.Remove(s3Descriptor);
 
             services.AddSingleton<IS3ResultStorage, InMemoryS3ResultStorage>();
+
+            // Replace infrastructure with stubs — no real Playwright/browser/proxy
+            RemoveAll<IBrowserPool>(services);
+            services.AddSingleton<IBrowserPool, StubBrowserPool>();
+
+            RemoveAll<IProxyRotator>(services);
+            services.AddSingleton<IProxyRotator, StubProxyRotator>();
+
+            RemoveAll<IStealthConfigurator>(services);
+            services.AddSingleton<IStealthConfigurator, StubStealthConfigurator>();
+
+            RemoveAll<IPerSourceRateLimiter>(services);
+            services.AddSingleton<IPerSourceRateLimiter, StubPerSourceRateLimiter>();
+
+            // Replace all plugins with stubs — no real network calls
+            RemoveAll<IReviewSourcePlugin>(services);
+            services.AddSingleton<IReviewSourcePlugin, StubReviewSourcePlugin>();
         });
+    }
+
+    private static void RemoveAll<T>(IServiceCollection services)
+    {
+        var descriptors = services.Where(d => d.ServiceType == typeof(T)).ToList();
+        foreach (var d in descriptors)
+            services.Remove(d);
     }
 
     protected override void Dispose(bool disposing)
@@ -46,4 +75,21 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
         }
         base.Dispose(disposing);
     }
+}
+
+/// <summary>
+/// Stub plugin for tests — returns empty results, never touches the network.
+/// Supports all source types so that any source slug is valid in tests.
+/// </summary>
+internal class StubReviewSourcePlugin : IReviewSourcePlugin
+{
+    public SourceType Source => SourceType.YandexMaps;
+
+    public Task<IReadOnlyList<SearchBranchResult>> SearchBranchesAsync(
+        CompanySearchRequest request, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<SearchBranchResult>>([]);
+
+    public Task<IReadOnlyList<RawReview>> FetchReviewsAsync(
+        BranchTarget branch, DateRange period, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<RawReview>>([]);
 }

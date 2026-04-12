@@ -22,6 +22,21 @@ public class PlaywrightBrowserPool : IBrowserPool, IAsyncDisposable
 
     private IPlaywright? _playwright;
     private IBrowser? _browser;
+    private string? _realBrowserVersion;
+
+    /// <summary>
+    /// Common desktop viewports — weighted towards popular resolutions.
+    /// </summary>
+    private static readonly ViewportSize[] Viewports =
+    [
+        new() { Width = 1920, Height = 1080 },
+        new() { Width = 1920, Height = 1080 },
+        new() { Width = 1366, Height = 768 },
+        new() { Width = 1536, Height = 864 },
+        new() { Width = 1440, Height = 900 },
+        new() { Width = 1680, Height = 1050 },
+        new() { Width = 2560, Height = 1440 },
+    ];
 
     public PlaywrightBrowserPool(
         ILogger<PlaywrightBrowserPool> logger,
@@ -39,12 +54,17 @@ public class PlaywrightBrowserPool : IBrowserPool, IAsyncDisposable
         {
             await EnsureInitializedAsync();
 
+            var viewport = Viewports[Random.Shared.Next(Viewports.Length)];
+            var ua = BuildUserAgent();
+
             var contextOptions = new BrowserNewContextOptions
             {
-                UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                UserAgent = ua,
                 Locale = "ru-RU",
                 TimezoneId = "Europe/Moscow",
-                ViewportSize = new ViewportSize { Width = 1920, Height = 1080 }
+                ViewportSize = viewport,
+                ScreenSize = new ScreenSize { Width = viewport.Width, Height = viewport.Height },
+                DeviceScaleFactor = Random.Shared.Next(0, 10) < 3 ? 2 : 1,
             };
 
             if (options?.Proxy is { } proxy)
@@ -58,7 +78,10 @@ public class PlaywrightBrowserPool : IBrowserPool, IAsyncDisposable
             }
 
             var context = await _browser!.NewContextAsync(contextOptions);
-            _logger.LogDebug("Browser context acquired (proxy: {HasProxy})", options?.Proxy != null);
+
+            _logger.LogDebug(
+                "[BrowserPool] Context создан: UA={UA}, viewport={W}x{H}, proxy={HasProxy}",
+                ua[^30..], viewport.Width, viewport.Height, options?.Proxy != null);
             return context;
         }
         catch
@@ -66,6 +89,13 @@ public class PlaywrightBrowserPool : IBrowserPool, IAsyncDisposable
             _semaphore.Release();
             throw;
         }
+    }
+
+    private string BuildUserAgent()
+    {
+        // Use real Chrome version from the launched browser to match TLS/JA3 fingerprint
+        var version = _realBrowserVersion ?? "136.0.0.0";
+        return $"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Safari/537.36";
     }
 
     public async Task ReleaseAsync(IBrowserContext context)
@@ -89,15 +119,21 @@ public class PlaywrightBrowserPool : IBrowserPool, IAsyncDisposable
         {
             if (_browser != null) return;
 
-            _logger.LogInformation("Initializing Playwright browser pool...");
+            _logger.LogInformation("[BrowserPool] Инициализация Playwright...");
             _playwright = await Playwright.CreateAsync();
             _browser = await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
             {
                 Channel = "chrome",
-                Headless = _options.Headless
+                Headless = _options.Headless,
+                Args = ["--disable-blink-features=AutomationControlled"]
             });
-            _logger.LogInformation("Playwright browser pool initialized (channel: chrome, headless: {Headless})",
-                _options.Headless);
+
+            // Extract real Chrome version for UA synchronization
+            _realBrowserVersion = _browser.Version;
+
+            _logger.LogInformation(
+                "[BrowserPool] Инициализирован: chrome {Version}, headless={Headless}",
+                _realBrowserVersion, _options.Headless);
         }
         finally
         {

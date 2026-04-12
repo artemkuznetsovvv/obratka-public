@@ -41,92 +41,118 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
 
     public SourceType Source => SourceType.YandexMaps;
 
+    private static readonly StealthProfile[] ProfileRotation =
+        [StealthProfile.Moderate, StealthProfile.Minimal, StealthProfile.Full];
+
     public async Task<IReadOnlyList<RawReview>> FetchReviewsAsync(
         BranchTarget branch, DateRange period, CancellationToken ct)
     {
-        _logger.LogInformation("Starting review collection for {BusinessId}", branch.ExternalId);
+        _logger.LogInformation(
+            "[YandexPlugin] === Начинаю сбор отзывов === BusinessId={BusinessId}, URL={Url}, период: {From} — {To}, режим: {Mode}",
+            branch.ExternalId, branch.ExternalUrl, period.From, period.To, _options.CollectionMode);
 
         await _rateLimiter.WaitAsync(SourceType.YandexMaps, ct);
+        _logger.LogDebug("[YandexPlugin] Rate limiter пройден");
 
-        var proxy = await _proxyRotator.GetProxyAsync(SourceType.YandexMaps, ct);
-        var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
+        var orgUrl = branch.ExternalUrl;
+        if (string.IsNullOrEmpty(orgUrl))
+            orgUrl = $"https://yandex.ru/maps/org/{branch.ExternalId}/";
 
-        try
+        IReadOnlyList<RawReview>? reviews = null;
+        Exception? lastException = null;
+
+        for (int attempt = 1; attempt <= _options.MaxRetries; attempt++)
         {
-            await _stealthConfigurator.ApplyStealthAsync(browserContext, ct);
+            var profile = ProfileRotation[(attempt - 1) % ProfileRotation.Length];
+            _logger.LogInformation(
+                "[YandexPlugin] Попытка {Attempt}/{MaxRetries} для {BusinessId} (stealth: {Profile})",
+                attempt, _options.MaxRetries, branch.ExternalId, profile);
 
-            var orgUrl = branch.ExternalUrl;
+            var proxy = await _proxyRotator.GetProxyAsync(SourceType.YandexMaps, ct);
+            _logger.LogDebug("[YandexPlugin] Прокси: {Proxy}",
+                proxy != null ? $"{proxy.Host}:{proxy.Port}" : "без прокси");
 
-            if (string.IsNullOrEmpty(orgUrl))
-                orgUrl = $"https://yandex.ru/maps/org/{branch.ExternalId}/";
+            var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
+            _logger.LogDebug("[YandexPlugin] Browser context получен");
 
-            IReadOnlyList<RawReview>? reviews = null;
-            Exception? lastException = null;
-
-            for (int attempt = 1; attempt <= _options.MaxRetries; attempt++)
+            try
             {
-                try
+                await _stealthConfigurator.ApplyStealthAsync(browserContext, profile, ct);
+                _logger.LogDebug("[YandexPlugin] Stealth-патчи применены (профиль: {Profile})", profile);
+
+                var isHeadful = !_browserOptions.Headless;
+                _logger.LogDebug("[YandexPlugin] Headful: {Headful}", isHeadful);
+
+                if (_options.CollectionMode == YandexCollectionMode.BrowserScroll)
                 {
-                    var isHeadful = !_browserOptions.Headless;
-
-                    if (_options.CollectionMode == YandexCollectionMode.BrowserScroll)
-                    {
-                        var scrollCollector = new BrowserScrollCollector(_options, _logger);
-                        reviews = await scrollCollector.CollectAllReviewsAsync(
-                            browserContext, orgUrl, branch, period, isHeadful, ct);
-                    }
-                    else
-                    {
-                        await using var session = await YandexSession.CreateAsync(
-                            browserContext, orgUrl, _logger, _options, ct, isHeadful);
-
-                        var apiClient = new YandexReviewApiClient(_logger);
-                        var collector = new YandexReviewCollector(apiClient, _options, _logger);
-
-                        reviews = await collector.CollectAllReviewsAsync(session, branch, period, ct);
-                    }
-
-                    break;
+                    _logger.LogDebug("[YandexPlugin] Запускаю BrowserScrollCollector...");
+                    var scrollCollector = new BrowserScrollCollector(_options, _logger);
+                    reviews = await scrollCollector.CollectAllReviewsAsync(
+                        browserContext, orgUrl, branch, period, isHeadful, ct);
                 }
-                catch (Exception ex) when (attempt < _options.MaxRetries && IsTransient(ex))
+                else
                 {
-                    lastException = ex;
-                    _logger.LogWarning(ex, "Attempt {Attempt}/{MaxRetries} failed for {BusinessId}, retrying...",
-                        attempt, _options.MaxRetries, branch.ExternalId);
+                    _logger.LogDebug("[YandexPlugin] Запускаю API-режим (создаю сессию)...");
+                    await using var session = await YandexSession.CreateAsync(
+                        browserContext, orgUrl, _logger, _options, ct, isHeadful);
 
-                    if (proxy != null)
-                        await _proxyRotator.ReportFailureAsync(proxy, ClassifyFailure(ex));
+                    var apiClient = new YandexReviewApiClient(_logger);
+                    var collector = new YandexReviewCollector(apiClient, _options, _logger);
 
-                    var backoff = (int)Math.Pow(2, attempt) * 1000;
-                    await Task.Delay(backoff, ct);
+                    reviews = await collector.CollectAllReviewsAsync(session, branch, period, ct);
                 }
+
+                _logger.LogInformation("[YandexPlugin] Попытка {Attempt} успешна: {Count} отзывов",
+                    attempt, reviews.Count);
+                break;
             }
+            catch (Exception ex) when (attempt < _options.MaxRetries && IsTransient(ex))
+            {
+                lastException = ex;
+                var failureReason = ClassifyFailure(ex);
+                _logger.LogWarning(ex,
+                    "[YandexPlugin] Попытка {Attempt}/{MaxRetries} провалена для {BusinessId}: {Reason} (stealth: {Profile}). Повтор...",
+                    attempt, _options.MaxRetries, branch.ExternalId, failureReason, profile);
 
-            if (reviews == null)
-                throw lastException ?? new InvalidOperationException("Failed to collect reviews");
+                if (proxy != null)
+                    await _proxyRotator.ReportFailureAsync(proxy, failureReason);
 
-            if (reviews.Count < 5)
-                _logger.LogWarning("Only {Count} reviews collected for {BusinessId} — below minimum threshold",
-                    reviews.Count, branch.ExternalId);
-
-            _logger.LogInformation("Collected {Count} reviews for {BusinessId}", reviews.Count, branch.ExternalId);
-            return reviews;
+                var backoff = (int)Math.Pow(2, attempt) * 1000;
+                _logger.LogDebug("[YandexPlugin] Backoff: {Delay}мс перед следующей попыткой", backoff);
+                await Task.Delay(backoff, ct);
+            }
+            finally
+            {
+                _logger.LogDebug("[YandexPlugin] Освобождаю browser context и прокси");
+                await _browserPool.ReleaseAsync(browserContext);
+                if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
+            }
         }
-        finally
-        {
-            await _browserPool.ReleaseAsync(browserContext);
-            if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
-        }
+
+        if (reviews == null)
+            throw lastException ?? new InvalidOperationException("Failed to collect reviews");
+
+        if (reviews.Count < 5)
+            _logger.LogWarning("[YandexPlugin] Мало отзывов: {Count} < 5 для {BusinessId}",
+                reviews.Count, branch.ExternalId);
+
+        _logger.LogInformation("[YandexPlugin] === Сбор завершён === {BusinessId}: {Count} отзывов",
+            branch.ExternalId, reviews.Count);
+        return reviews;
     }
 
     public async Task<IReadOnlyList<SearchBranchResult>> SearchBranchesAsync(
         CompanySearchRequest request, CancellationToken ct)
     {
-        _logger.LogInformation("Searching branches for '{Query}' in '{City}'", request.Query, request.City);
+        _logger.LogInformation("[YandexPlugin] === Поиск организаций === запрос='{Query}', город='{City}'",
+            request.Query, request.City);
 
         await _rateLimiter.WaitAsync(SourceType.YandexMaps, ct);
 
         var proxy = await _proxyRotator.GetProxyAsync(SourceType.YandexMaps, ct);
+        _logger.LogDebug("[YandexPlugin] Поиск: прокси={Proxy}",
+            proxy != null ? $"{proxy.Host}:{proxy.Port}" : "без прокси");
+
         var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
 
         try
@@ -142,6 +168,7 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
                     : $"{request.Query} {request.City}";
 
                 var searchUrl = $"https://yandex.ru/maps/?text={Uri.EscapeDataString(searchQuery)}";
+                _logger.LogDebug("[YandexPlugin] Открываю поиск: {Url}", searchUrl);
 
                 await page.GotoAsync(searchUrl, new PageGotoOptions
                 {
@@ -149,11 +176,14 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
                     Timeout = 30_000
                 });
 
+                _logger.LogDebug("[YandexPlugin] Страница поиска загружена, URL: {Url}", page.Url);
                 await Task.Delay(Random.Shared.Next(2000, 4000), ct);
 
+                _logger.LogDebug("[YandexPlugin] Извлекаю карточки организаций из DOM...");
                 var results = await ExtractSearchResultsAsync(page, ct);
 
-                _logger.LogInformation("Found {Count} branches for '{Query}'", results.Count, request.Query);
+                _logger.LogInformation("[YandexPlugin] === Поиск завершён === найдено {Count} организаций для '{Query}'",
+                    results.Count, request.Query);
                 return results;
             }
             finally

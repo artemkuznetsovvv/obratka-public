@@ -13,8 +13,11 @@ public class StubStealthConfigurator : IStealthConfigurator
     }
 
     public Task ApplyStealthAsync(IBrowserContext browserContext, CancellationToken ct)
+        => ApplyStealthAsync(browserContext, StealthProfile.Moderate, ct);
+
+    public Task ApplyStealthAsync(IBrowserContext browserContext, StealthProfile profile, CancellationToken ct)
     {
-        _logger.LogDebug("Stealth configuration is not implemented yet");
+        _logger.LogDebug("Stub stealth (profile: {Profile}) — no patches applied", profile);
         return Task.CompletedTask;
     }
 }

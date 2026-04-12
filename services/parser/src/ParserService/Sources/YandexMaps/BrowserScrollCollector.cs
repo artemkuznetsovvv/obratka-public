@@ -42,26 +42,36 @@ internal sealed class BrowserScrollCollector
         var page = await browserContext.NewPageAsync();
         try
         {
+            _logger.LogInformation("[BrowserScroll] Начинаю сбор отзывов для {BusinessId} (URL: {Url})",
+                branch.ExternalId, orgUrl);
+
             // --- Step 1: Set up response interception ---
             page.Response += (_, response) =>
             {
                 if (!response.Url.Contains("/maps/api/business/fetchReviews"))
                     return;
+
                 if (response.Status != 200)
+                {
+                    _logger.LogWarning("[BrowserScroll] fetchReviews вернул статус {Status}, URL: {Url}",
+                        response.Status, response.Url);
                     return;
+                }
 
                 _ = CaptureResponseAsync(response, interceptedResponses);
             };
+            _logger.LogDebug("[BrowserScroll] Перехват fetchReviews ответов настроен");
 
             // --- Step 2: Optional warm-up ---
             if (_options.WarmUpSession)
             {
+                _logger.LogDebug("[BrowserScroll] Прогрев сессии включён, открываю yandex.ru...");
                 await YandexSession.WarmUpAsync(page, _logger, ct);
             }
 
             // --- Step 3: Navigate to reviews page ---
             var reviewsUrl = BuildReviewsUrl(orgUrl);
-            _logger.LogInformation("BrowserScroll: navigating to {Url}", reviewsUrl);
+            _logger.LogInformation("[BrowserScroll] Перехожу на страницу отзывов: {Url}", reviewsUrl);
 
             await page.GotoAsync(reviewsUrl, new PageGotoOptions
             {
@@ -69,13 +79,15 @@ internal sealed class BrowserScrollCollector
                 Timeout = _options.NavigationTimeoutMs
             });
 
+            _logger.LogDebug("[BrowserScroll] Страница загружена, текущий URL: {Url}", page.Url);
             await Task.Delay(Random.Shared.Next(2000, 4000), ct);
 
             // --- Step 4: Handle captcha ---
             var html = await page.ContentAsync();
+            _logger.LogDebug("[BrowserScroll] Проверяю наличие капчи...");
             if (SmartCaptchaHandler.IsCaptchaPage(html))
             {
-                _logger.LogWarning("SmartCaptcha detected on reviews page");
+                _logger.LogWarning("[BrowserScroll] SmartCaptcha обнаружена на странице отзывов!");
                 var captchaHandler = new SmartCaptchaHandler(_logger, _options);
                 var solved = await captchaHandler.TrySolveCaptchaAsync(page, headful, ct);
 
@@ -88,19 +100,27 @@ internal sealed class BrowserScrollCollector
                     throw new SmartCaptchaException(
                         "SmartCaptcha appeared again after solving. IP is likely flagged.");
 
+                _logger.LogInformation("[BrowserScroll] Капча решена, продолжаю сбор");
                 await Task.Delay(Random.Shared.Next(2000, 4000), ct);
+            }
+            else
+            {
+                _logger.LogDebug("[BrowserScroll] Капча не обнаружена — всё чисто");
             }
 
             // --- Step 5: Select sort by date ---
+            _logger.LogDebug("[BrowserScroll] Переключаю сортировку на 'По новизне'...");
             await SelectSortByDateAsync(page, ct);
 
             // --- Step 6: Process initial intercepted responses ---
             await Task.Delay(Random.Shared.Next(1000, 2000), ct);
             var reachedDateBound = DrainQueue(interceptedResponses, reviews, seenIds, branch, period, ref hasMore);
 
-            _logger.LogDebug("Initial batch: {Count} reviews, hasMore={HasMore}", reviews.Count, hasMore);
+            _logger.LogInformation("[BrowserScroll] Первая порция: {Count} отзывов, есть ещё: {HasMore}, дата-граница: {DateBound}",
+                reviews.Count, hasMore, reachedDateBound);
 
             // --- Step 7: Scroll loop ---
+            _logger.LogDebug("[BrowserScroll] Начинаю скролл-цикл (макс. {Max} попыток)", _options.MaxScrollAttempts);
             int consecutiveEmpty = 0;
             const int maxConsecutiveEmpty = 5;
 
@@ -113,12 +133,18 @@ internal sealed class BrowserScrollCollector
                 await TriggerNextPageAsync(page, ct);
 
                 // Wait for intercepted response to arrive (poll queue with timeout)
-                // instead of a blind delay — prevents premature "empty" verdicts
                 var waitDeadline = DateTime.UtcNow.AddMilliseconds(_options.DelayBetweenPagesMaxMs * 2);
+                var waitStart = DateTime.UtcNow;
                 while (interceptedResponses.IsEmpty && DateTime.UtcNow < waitDeadline)
                 {
                     await Task.Delay(300, ct);
                 }
+
+                var waitedMs = (int)(DateTime.UtcNow - waitStart).TotalMilliseconds;
+                if (interceptedResponses.IsEmpty)
+                    _logger.LogDebug("[BrowserScroll] Скролл #{Attempt}: ответ не получен за {WaitedMs}мс", attempt + 1, waitedMs);
+                else
+                    _logger.LogDebug("[BrowserScroll] Скролл #{Attempt}: ответ получен за {WaitedMs}мс", attempt + 1, waitedMs);
 
                 // Human-like pause after response arrives
                 await Task.Delay(Random.Shared.Next(
@@ -127,27 +153,31 @@ internal sealed class BrowserScrollCollector
 
                 reachedDateBound = DrainQueue(interceptedResponses, reviews, seenIds, branch, period, ref hasMore);
 
-                if (reviews.Count == beforeCount)
+                var newReviews = reviews.Count - beforeCount;
+
+                if (newReviews == 0)
                 {
                     consecutiveEmpty++;
-                    _logger.LogDebug("Scroll attempt {Attempt}: no new reviews (empty streak: {Streak})",
-                        attempt + 1, consecutiveEmpty);
+                    _logger.LogDebug("[BrowserScroll] Скролл #{Attempt}: нет новых отзывов (пустых подряд: {Streak}/{Max})",
+                        attempt + 1, consecutiveEmpty, maxConsecutiveEmpty);
 
                     if (consecutiveEmpty >= maxConsecutiveEmpty)
                     {
-                        _logger.LogDebug("{Max} consecutive empty scrolls, stopping", maxConsecutiveEmpty);
+                        _logger.LogInformation("[BrowserScroll] {Max} пустых скроллов подряд — останавливаюсь", maxConsecutiveEmpty);
                         break;
                     }
                 }
                 else
                 {
                     consecutiveEmpty = 0;
-                    _logger.LogDebug("Scroll attempt {Attempt}: total {Count} reviews", attempt + 1, reviews.Count);
+                    _logger.LogDebug("[BrowserScroll] Скролл #{Attempt}: +{New} новых, всего {Total} отзывов (уникальных ID: {Unique})",
+                        attempt + 1, newReviews, reviews.Count, seenIds.Count);
                 }
             }
 
-            _logger.LogInformation("BrowserScroll: collected {Count} reviews for {BusinessId}",
-                reviews.Count, branch.ExternalId);
+            _logger.LogInformation(
+                "[BrowserScroll] Сбор завершён для {BusinessId}: {Count} отзывов, уникальных ID: {Unique}, hasMore: {HasMore}, дата-граница: {DateBound}",
+                branch.ExternalId, reviews.Count, seenIds.Count, hasMore, reachedDateBound);
 
             return reviews;
         }
@@ -164,19 +194,25 @@ internal sealed class BrowserScrollCollector
         try
         {
             var body = await response.TextAsync();
-            // Real API wraps payload in { "data": { "reviews": [...] } }
+            _logger.LogDebug("[BrowserScroll] Перехвачен fetchReviews ответ ({Length} байт)", body.Length);
+
             var root = JsonSerializer.Deserialize<YandexFetchReviewsRoot>(body, JsonOptions);
             var parsed = root?.Data;
             if (parsed?.Reviews != null)
             {
                 queue.Enqueue(parsed);
-                _logger.LogDebug("Intercepted fetchReviews response: {Count} reviews, hasMore={HasMore}",
+                _logger.LogDebug("[BrowserScroll] Распарсен ответ: {Count} отзывов, hasMore={HasMore}",
                     parsed.Reviews.Count, parsed.HasMore);
+            }
+            else
+            {
+                _logger.LogWarning("[BrowserScroll] Ответ fetchReviews без отзывов. Тело (первые 500 симв.): {Body}",
+                    body.Length > 500 ? body[..500] : body);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Failed to capture fetchReviews response");
+            _logger.LogWarning(ex, "[BrowserScroll] Ошибка парсинга fetchReviews ответа");
         }
     }
 
@@ -266,12 +302,25 @@ internal sealed class BrowserScrollCollector
     {
         // Yandex Maps uses infinite scroll inside a sidebar panel (div.scroll__container),
         // NOT window scroll. body has overflow:hidden. Scrolling window does nothing.
-        await page.EvaluateAsync(@"() => {
+        // Smooth scroll in 3-6 steps to simulate human behavior.
+        await page.EvaluateAsync(@"async () => {
             const c = document.querySelector('.scroll__container');
-            if (c) c.scrollTop = c.scrollHeight;
-            else window.scrollTo(0, document.body.scrollHeight);
+            if (!c) { window.scrollTo(0, document.body.scrollHeight); return; }
+
+            const target = c.scrollHeight;
+            const current = c.scrollTop;
+            const distance = target - current;
+            if (distance <= 0) return;
+
+            const steps = 3 + Math.floor(Math.random() * 4); // 3-6 steps
+            for (let i = 1; i <= steps; i++) {
+                // Ease-out: bigger jumps at start, smaller at end
+                const progress = 1 - Math.pow(1 - i / steps, 2);
+                c.scrollTop = current + distance * progress;
+                await new Promise(r => setTimeout(r, 80 + Math.random() * 120));
+            }
         }");
-        _logger.LogDebug("Scrolled sidebar container to bottom");
+        _logger.LogDebug("[BrowserScroll] Плавный скролл sidebar (ease-out)");
     }
 
     private bool DrainQueue(

@@ -53,13 +53,17 @@ internal sealed partial class YandexSession : IAsyncDisposable
 
         try
         {
+            logger.LogInformation("[Session] Создаю сессию для {Url}", organizationUrl);
+
             // --- Step 1: Warm-up session ---
             if (options.WarmUpSession)
             {
+                logger.LogDebug("[Session] Прогрев сессии включён");
                 await WarmUpAsync(page, logger, ct);
             }
 
             // --- Step 2: Intercept params from XHR ---
+            logger.LogDebug("[Session] Настраиваю перехват параметров из API-запросов...");
             string? interceptedCsrfToken = null;
             string? interceptedSessionId = null;
             string? interceptedReqId = null;
@@ -89,7 +93,7 @@ internal sealed partial class YandexSession : IAsyncDisposable
             });
 
             // --- Step 3: Navigate to org page ---
-            logger.LogDebug("Navigating to {Url}", organizationUrl);
+            logger.LogDebug("[Session] Перехожу на страницу организации: {Url}", organizationUrl);
             await page.GotoAsync(organizationUrl, new PageGotoOptions
             {
                 WaitUntil = WaitUntilState.NetworkIdle,
@@ -99,10 +103,11 @@ internal sealed partial class YandexSession : IAsyncDisposable
             await Task.Delay(Random.Shared.Next(2000, 4000), ct);
 
             // --- Step 4: Check for SmartCaptcha ---
+            logger.LogDebug("[Session] Страница загружена, текущий URL: {Url}. Проверяю капчу...", page.Url);
             var html = await page.ContentAsync();
             if (SmartCaptchaHandler.IsCaptchaPage(html))
             {
-                logger.LogWarning("SmartCaptcha detected on org page");
+                logger.LogWarning("[Session] SmartCaptcha обнаружена на странице организации!");
 
                 var captchaHandler = new SmartCaptchaHandler(logger, options);
                 var solved = await captchaHandler.TrySolveCaptchaAsync(page, headful, ct);
@@ -121,21 +126,32 @@ internal sealed partial class YandexSession : IAsyncDisposable
             }
 
             // --- Step 5: Extract csrfToken + session params ---
+            logger.LogDebug("[Session] Капча не обнаружена. Извлекаю csrfToken и параметры сессии...");
             var csrfToken = ExtractCsrfToken(html);
             var sessionId = ExtractFromScript(html, SessionIdInScriptRegex());
             var reqId = ExtractFromScript(html, ReqIdInScriptRegex());
 
+            logger.LogDebug("[Session] Из HTML: csrfToken={HasCsrf}, sessionId={HasSid}, reqId={HasReq}",
+                csrfToken != null, sessionId != null, reqId != null);
+
             // Try JS evaluation for missing params
             if (csrfToken is null || sessionId is null)
             {
-                logger.LogDebug("Trying JS evaluation for page params");
+                logger.LogDebug("[Session] Параметры не полные, пробую JS-извлечение...");
                 var jsParams = await TryExtractParamsViaJsAsync(page, logger);
                 csrfToken ??= jsParams.CsrfToken;
                 sessionId ??= jsParams.SessionId;
                 reqId ??= jsParams.ReqId;
+
+                logger.LogDebug("[Session] После JS: csrfToken={HasCsrf}, sessionId={HasSid}",
+                    csrfToken != null, sessionId != null);
             }
 
             // Use intercepted values as fallback
+            if (csrfToken is null || sessionId is null)
+            {
+                logger.LogDebug("[Session] Пробую перехваченные значения из API-запросов...");
+            }
             csrfToken ??= interceptedCsrfToken;
             sessionId ??= interceptedSessionId;
             reqId ??= interceptedReqId;
@@ -143,13 +159,13 @@ internal sealed partial class YandexSession : IAsyncDisposable
             if (csrfToken is null)
             {
                 var snippet = html.Length > 2000 ? html[..2000] : html;
-                logger.LogError("Failed to extract csrfToken. HTML snippet: {Snippet}", snippet);
+                logger.LogError("[Session] Не удалось извлечь csrfToken! HTML (первые 2000 симв.): {Snippet}", snippet);
                 throw new InvalidOperationException("Failed to extract csrfToken from page");
             }
 
             if (string.IsNullOrEmpty(sessionId))
             {
-                logger.LogWarning("Could not extract sessionId from page context, generating fallback");
+                logger.LogWarning("[Session] sessionId не найден — генерирую fallback");
                 sessionId = GenerateSessionId();
             }
 
@@ -160,9 +176,9 @@ internal sealed partial class YandexSession : IAsyncDisposable
             var apiBaseUrl = interceptedApiBaseUrl ?? $"{pageUri.Scheme}://{pageUri.Host}";
             var locale = interceptedLocale ?? "ru_RU";
 
-            logger.LogDebug(
-                "Session created: csrfToken length={CsrfLen}, sessionId={SessionId}, apiBaseUrl={ApiBaseUrl}, reqId={ReqId}, locale={Locale}",
-                csrfToken.Length, sessionId, apiBaseUrl, reqId ?? "(none)", locale);
+            logger.LogInformation(
+                "[Session] Сессия создана: csrfToken={CsrfLen} симв., sessionId={SessionId}, apiBase={ApiBaseUrl}, locale={Locale}, cookies={CookieCount}",
+                csrfToken.Length, sessionId, apiBaseUrl, locale, cookies.Count);
 
             return new YandexSession(csrfToken, sessionId, apiBaseUrl, reqId, locale, cookies, context);
         }
@@ -178,43 +194,76 @@ internal sealed partial class YandexSession : IAsyncDisposable
     /// </summary>
     internal static async Task WarmUpAsync(IPage page, ILogger logger, CancellationToken ct)
     {
-        logger.LogDebug("Warming up session — visiting yandex.ru");
+        logger.LogDebug("[WarmUp] Прогрев сессии — многоэтапный...");
 
         try
         {
+            // --- Этап 1: Главная Яндекса —  установить cookies, trust score ---
+            logger.LogDebug("[WarmUp] Этап 1: открываю yandex.ru...");
             await page.GotoAsync("https://yandex.ru/", new PageGotoOptions
             {
                 WaitUntil = WaitUntilState.DOMContentLoaded,
                 Timeout = 15_000
             });
 
-            // Simulate a real user spending time on the main page
-            await Task.Delay(Random.Shared.Next(2000, 5000), ct);
+            logger.LogDebug("[WarmUp] yandex.ru загружен, URL: {Url}", page.Url);
 
-            // Simulate some mouse movement on main page
-            await page.Mouse.MoveAsync(
-                Random.Shared.Next(200, 800),
-                Random.Shared.Next(200, 500),
-                new MouseMoveOptions { Steps = Random.Shared.Next(3, 8) });
+            // Имитация чтения главной страницы
+            await Task.Delay(Random.Shared.Next(2000, 4000), ct);
 
-            await Task.Delay(Random.Shared.Next(500, 1500), ct);
+            // Несколько случайных движений мыши (как человек осматривает страницу)
+            for (int i = 0; i < Random.Shared.Next(2, 5); i++)
+            {
+                await page.Mouse.MoveAsync(
+                    Random.Shared.Next(100, 1200),
+                    Random.Shared.Next(100, 600),
+                    new MouseMoveOptions { Steps = Random.Shared.Next(5, 15) });
+                await Task.Delay(Random.Shared.Next(300, 800), ct);
+            }
 
-            // Check for captcha even on main page
+            // Проверка капчи на главной
             var html = await page.ContentAsync();
             if (SmartCaptchaHandler.IsCaptchaPage(html))
             {
-                logger.LogWarning("SmartCaptcha on yandex.ru main page — IP is heavily flagged");
-                // Don't try to solve here, let it fail at the org page level
-                // so the retry/IP rotation logic kicks in
+                logger.LogWarning("[WarmUp] SmartCaptcha на yandex.ru — IP сильно заблокирован!");
+                return;
             }
-            else
+
+            // Небольшой скролл вниз (как будто листаем новости)
+            await page.Mouse.WheelAsync(0, Random.Shared.Next(200, 500));
+            await Task.Delay(Random.Shared.Next(1000, 2000), ct);
+
+            // --- Этап 2: Переход на Яндекс.Карты (через навигацию, не прямой URL) ---
+            logger.LogDebug("[WarmUp] Этап 2: перехожу на yandex.ru/maps...");
+            await page.GotoAsync("https://yandex.ru/maps/", new PageGotoOptions
             {
-                logger.LogDebug("Warm-up completed, cookies established");
+                WaitUntil = WaitUntilState.DOMContentLoaded,
+                Timeout = 15_000
+            });
+
+            logger.LogDebug("[WarmUp] Карты загружены, URL: {Url}", page.Url);
+            await Task.Delay(Random.Shared.Next(2000, 4000), ct);
+
+            // Движение мыши по карте
+            await page.Mouse.MoveAsync(
+                Random.Shared.Next(400, 1000),
+                Random.Shared.Next(300, 600),
+                new MouseMoveOptions { Steps = Random.Shared.Next(5, 10) });
+            await Task.Delay(Random.Shared.Next(500, 1500), ct);
+
+            // Проверка капчи на картах
+            html = await page.ContentAsync();
+            if (SmartCaptchaHandler.IsCaptchaPage(html))
+            {
+                logger.LogWarning("[WarmUp] SmartCaptcha на yandex.ru/maps — IP заблокирован!");
+                return;
             }
+
+            logger.LogDebug("[WarmUp] Прогрев завершён (2 этапа), cookies установлены");
         }
         catch (Exception ex)
         {
-            logger.LogDebug(ex, "Warm-up navigation failed, continuing anyway");
+            logger.LogWarning(ex, "[WarmUp] Ошибка при прогреве сессии, продолжаю...");
         }
     }
 
