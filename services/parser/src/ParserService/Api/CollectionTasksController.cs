@@ -87,6 +87,128 @@ public class CollectionTasksController : ControllerBase
     }
 
     /// <summary>
+    /// QA-endpoint: проверка fingerprint браузера через bot.sannysoft.com. Только в Development.
+    /// GET /api/collection-tasks/qa/fingerprint?profile=Moderate
+    /// </summary>
+    [HttpGet("qa/fingerprint")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> QaFingerprint(
+        [FromQuery] string? profile,
+        [FromQuery] string? source,
+        [FromServices] IBrowserPool browserPool,
+        [FromServices] Infrastructure.Stealth.IStealthConfigurator stealthConfigurator,
+        [FromServices] Infrastructure.Proxy.IProxyRotator proxyRotator,
+        CancellationToken ct)
+    {
+        if (!_env.IsDevelopment())
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "QA endpoint is only available in Development" });
+
+        var stealthProfile = Enum.TryParse<Infrastructure.Stealth.StealthProfile>(profile, true, out var p)
+            ? p
+            : Infrastructure.Stealth.StealthProfile.Moderate;
+
+        var sourceType = Core.Models.SourceType.YandexMaps;
+        if (source != null && SourceTypeExtensions.TryFromSlug(source, out var parsed))
+            sourceType = parsed;
+
+        var proxy = await proxyRotator.GetProxyAsync(sourceType, ct);
+        var browserContext = await browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
+
+        try
+        {
+            await stealthConfigurator.ApplyStealthAsync(browserContext, stealthProfile, ct);
+
+            var page = await browserContext.NewPageAsync();
+            try
+            {
+                await page.GotoAsync("https://bot.sannysoft.com/", new Microsoft.Playwright.PageGotoOptions
+                {
+                    WaitUntil = Microsoft.Playwright.WaitUntilState.NetworkIdle,
+                    Timeout = 30_000
+                });
+
+                await Task.Delay(2000, ct);
+
+                var results = await page.EvaluateAsync<System.Text.Json.JsonElement>("""
+                    () => {
+                        const tests = {};
+                        const failed = [];
+
+                        // Main tests table
+                        const table = document.querySelector('table');
+                        if (table) {
+                            table.querySelectorAll('tr').forEach(row => {
+                                const cells = row.querySelectorAll('td');
+                                if (cells.length >= 2) {
+                                    const name = cells[0]?.innerText?.trim();
+                                    const value = cells[1]?.innerText?.trim();
+                                    const cls = cells[1]?.className || '';
+                                    if (name) {
+                                        const passed = cls.includes('passed');
+                                        tests[name] = { value, passed };
+                                        if (!passed) failed.push(name);
+                                    }
+                                }
+                            });
+                        }
+
+                        // Fingerprint Scanner table
+                        const tables = document.querySelectorAll('table');
+                        if (tables.length > 1) {
+                            tables[1].querySelectorAll('tr').forEach(row => {
+                                const cells = row.querySelectorAll('td');
+                                if (cells.length >= 2) {
+                                    const name = cells[0]?.innerText?.trim();
+                                    const value = cells[1]?.innerText?.trim();
+                                    const cls = cells[1]?.className || '';
+                                    if (name) {
+                                        const passed = cls.includes('passed') || value === 'ok';
+                                        tests['FP:' + name] = { value, passed };
+                                        if (!passed) failed.push('FP:' + name);
+                                    }
+                                }
+                            });
+                        }
+
+                        return {
+                            total: Object.keys(tests).length,
+                            passed: Object.values(tests).filter(t => t.passed).length,
+                            failed_count: failed.length,
+                            failed_tests: failed,
+                            user_agent: navigator.userAgent,
+                            webdriver: navigator.webdriver,
+                            languages: navigator.languages,
+                            platform: navigator.platform,
+                            hardware_concurrency: navigator.hardwareConcurrency,
+                            device_memory: navigator.deviceMemory,
+                            screen: { width: screen.width, height: screen.height, dpr: window.devicePixelRatio },
+                            tests
+                        };
+                    }
+                """);
+
+                return Ok(new
+                {
+                    stealth_profile = stealthProfile.ToString(),
+                    proxy = proxy != null ? $"{proxy.Host}:{proxy.Port}" : "none",
+                    diagnostics = results
+                });
+            }
+            finally
+            {
+                await page.CloseAsync();
+            }
+        }
+        finally
+        {
+            await browserPool.ReleaseAsync(browserContext);
+            if (proxy != null) await proxyRotator.ReleaseProxyAsync(proxy);
+        }
+    }
+
+    /// <summary>
     /// QA-endpoint: прямой вызов плагина по businessId. Только в Development.
     /// GET /api/collection-tasks/qa/yandex/{businessId}?date_from=2024-01-01
     /// </summary>

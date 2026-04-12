@@ -34,12 +34,40 @@ public class PlaywrightStealthConfigurator : IStealthConfigurator
     /// Proven safe — no known detection by Yandex.
     /// </summary>
     private const string MinimalScript = """
-        // Hide webdriver flag
-        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        // Hide webdriver flag — intercept defineProperty on Navigator.prototype
+        // so Chromium's native code can't re-set it after our init script runs.
+        const _origDefProp = Object.defineProperty;
+        Object.defineProperty = function(obj, prop, desc) {
+            if (prop === 'webdriver' && obj === Navigator.prototype) {
+                return obj; // silently block Chromium from setting webdriver=true
+            }
+            return _origDefProp.call(this, obj, prop, desc);
+        };
+        // Also delete from prototype and set to false on navigator itself
+        delete Navigator.prototype.webdriver;
+        _origDefProp.call(Object, navigator, 'webdriver', {
+            get: () => false,
+            configurable: true
+        });
 
-        // Override plugins to look real
+        // Override plugins — preserve PluginArray prototype so instanceof check passes
+        const originalPlugins = navigator.plugins;
         Object.defineProperty(navigator, 'plugins', {
-            get: () => [1, 2, 3, 4, 5]
+            get: () => {
+                const p = originalPlugins;
+                if (p.length >= 1) return p;
+                // Fallback: create a proxy that mimics PluginArray
+                return new Proxy(originalPlugins, {
+                    get(target, prop) {
+                        if (prop === 'length') return 5;
+                        if (prop === Symbol.iterator) return function*() {
+                            for (let i = 0; i < 5; i++) yield target[0] || {};
+                        };
+                        return Reflect.get(target, prop);
+                    }
+                });
+            },
+            configurable: true
         });
 
         // Override languages
