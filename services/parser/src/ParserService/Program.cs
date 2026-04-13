@@ -57,6 +57,11 @@ builder.Services.AddSingleton<IPerSourceRateLimiter, PerSourceRateLimiter>();
 builder.Services.Configure<YandexMapsOptions>(
     builder.Configuration.GetSection(YandexMapsOptions.SectionName));
 
+// --- TwoGis configuration ---
+builder.Services.Configure<TwoGisOptions>(
+    builder.Configuration.GetSection(TwoGisOptions.SectionName));
+builder.Services.AddHttpClient("2gis");
+
 // --- Core ---
 builder.Services.AddScoped<ITaskRepository, SqliteTaskRepository>();
 builder.Services.AddScoped<CollectionTaskOrchestrator>();
