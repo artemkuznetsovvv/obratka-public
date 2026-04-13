@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using Microsoft.Playwright;
@@ -149,6 +150,11 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
                 await page.CloseAsync();
             }
         }
+        catch (Exception ex) when (proxy != null)
+        {
+            await _proxyRotator.ReportFailureAsync(proxy, ClassifyFailure(ex));
+            throw;
+        }
         finally
         {
             await _browserPool.ReleaseAsync(browserContext);
@@ -161,13 +167,33 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
     private async Task<IReadOnlyList<RawReview>> CollectViaApiAsync(
         BranchTarget branch, DateRange period, CancellationToken ct)
     {
-        var apiKey = await GetApiKeyAsync(ct);
-        var httpClient = _httpClientFactory.CreateClient("2gis");
-        var apiClient = new TwoGisApiClient(httpClient, _logger);
-        var collector = new TwoGisApiCollector(apiClient, _options, _logger);
+        var proxy = await _proxyRotator.GetProxyAsync(SourceType.TwoGis, ct);
+        _logger.LogDebug("[2GIS] API-режим: прокси={Proxy}",
+            proxy != null ? $"{proxy.Host}:{proxy.Port}" : "без прокси");
 
-        return await collector.CollectAllReviewsAsync(
-            branch.ExternalId, apiKey, branch, period, ct);
+        try
+        {
+            var apiKey = await GetApiKeyAsync(proxy, ct);
+
+            using var httpClient = CreateHttpClient(proxy);
+            var apiClient = new TwoGisApiClient(httpClient, _logger);
+            var collector = new TwoGisApiCollector(apiClient, _options, _logger);
+
+            return await collector.CollectAllReviewsAsync(
+                branch.ExternalId, apiKey, branch, period, ct);
+        }
+        catch (Exception ex) when (proxy != null)
+        {
+            var reason = ClassifyFailure(ex);
+            _logger.LogWarning("[2GIS] API proxy {Host}:{Port} failure: {Reason}",
+                proxy.Host, proxy.Port, reason);
+            await _proxyRotator.ReportFailureAsync(proxy, reason);
+            throw;
+        }
+        finally
+        {
+            if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
+        }
     }
 
     private async Task<IReadOnlyList<RawReview>> CollectViaBrowserAsync(
@@ -182,6 +208,14 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
             return await collector.CollectAllReviewsAsync(
                 browserContext, branch.ExternalId, branch, period, ct);
         }
+        catch (Exception ex) when (proxy != null)
+        {
+            var reason = ClassifyFailure(ex);
+            _logger.LogWarning("[2GIS] Proxy {Host}:{Port} failure: {Reason}",
+                proxy.Host, proxy.Port, reason);
+            await _proxyRotator.ReportFailureAsync(proxy, reason);
+            throw;
+        }
         finally
         {
             await _browserPool.ReleaseAsync(browserContext);
@@ -191,7 +225,7 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
 
     // ---- Private: API key management ----
 
-    private async Task<string> GetApiKeyAsync(CancellationToken ct)
+    private async Task<string> GetApiKeyAsync(ProxyInfo? proxy, CancellationToken ct)
     {
         // 1. Конфиг
         if (!string.IsNullOrEmpty(_options.ReviewApiKey))
@@ -201,15 +235,16 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
         if (!string.IsNullOrEmpty(_cachedApiKey))
             return _cachedApiKey;
 
-        // 3. Извлекаем из страницы 2GIS
+        // 3. Извлекаем из страницы 2GIS (через тот же прокси)
         await _apiKeyLock.WaitAsync(ct);
         try
         {
             if (!string.IsNullOrEmpty(_cachedApiKey))
                 return _cachedApiKey;
 
-            _logger.LogInformation("[2GIS] Извлекаю API-ключ со страницы 2gis.ru...");
-            var key = await ExtractApiKeyFromPageAsync(ct);
+            _logger.LogInformation("[2GIS] Извлекаю API-ключ со страницы 2gis.ru (прокси: {Proxy})...",
+                proxy != null ? $"{proxy.Host}:{proxy.Port}" : "без прокси");
+            var key = await ExtractApiKeyFromPageAsync(proxy, ct);
             _cachedApiKey = key;
             _logger.LogInformation("[2GIS] API-ключ получен: {Key}", key);
             return key;
@@ -220,9 +255,9 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
         }
     }
 
-    private async Task<string> ExtractApiKeyFromPageAsync(CancellationToken ct)
+    private async Task<string> ExtractApiKeyFromPageAsync(ProxyInfo? proxy, CancellationToken ct)
     {
-        var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(null), ct);
+        var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
         try
         {
             var page = await browserContext.NewPageAsync();
@@ -260,6 +295,18 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
         {
             await _browserPool.ReleaseAsync(browserContext);
         }
+    }
+
+    private static HttpClient CreateHttpClient(ProxyInfo? proxy)
+    {
+        if (proxy == null)
+            return new HttpClient();
+
+        var webProxy = new WebProxy(proxy.Host, proxy.Port);
+        if (!string.IsNullOrEmpty(proxy.Username))
+            webProxy.Credentials = new NetworkCredential(proxy.Username, proxy.Password);
+
+        return new HttpClient(new HttpClientHandler { Proxy = webProxy, UseProxy = true });
     }
 
     // ---- Private: search ----
@@ -349,6 +396,19 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
                 || pe.Message.Contains("net::", StringComparison.OrdinalIgnoreCase);
         return false;
     }
+
+    private static ProxyFailureReason ClassifyFailure(Exception ex) => ex switch
+    {
+        TimeoutException => ProxyFailureReason.Timeout,
+        HttpRequestException { StatusCode: System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.Unauthorized }
+            => ProxyFailureReason.ServerError,
+        HttpRequestException => ProxyFailureReason.ConnectionError,
+        PlaywrightException pe when pe.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase)
+            => ProxyFailureReason.Timeout,
+        PlaywrightException pe when pe.Message.Contains("net::", StringComparison.OrdinalIgnoreCase)
+            => ProxyFailureReason.ConnectionError,
+        _ => ProxyFailureReason.ServerError
+    };
 
     private record SearchResultJson(
         [property: System.Text.Json.Serialization.JsonPropertyName("firmId")] string? FirmId,
