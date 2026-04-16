@@ -201,77 +201,147 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
     private async Task<IReadOnlyList<SearchBranchResult>> ExtractSearchResultsAsync(
         IPage page, CancellationToken ct)
     {
+        // Case 2: поиск с одним результатом редиректит сразу на карточку организации
+        // URL вида /maps/org/{slug}/{businessId}/
+        var currentUrl = page.Url;
+        var directMatch = DirectOrgUrlRegex().Match(currentUrl);
+        if (directMatch.Success)
+        {
+            _logger.LogDebug("[YandexPlugin] Case 2: редирект на карточку организации, извлекаю из single-page");
+            var single = await ExtractSingleOrgAsync(page, directMatch.Groups[1].Value, ct);
+            return single != null ? [single] : [];
+        }
+
+        // Case 1: обычный список результатов. Делаем один JS-проход — быстрее и устойчивее.
+        var json = await page.EvaluateAsync<string>("""
+            () => {
+                const items = document.querySelectorAll('ul.search-list-view__list > li.search-snippet-view');
+                const out = [];
+                for (const li of items) {
+                    try {
+                        const nameLink = li.querySelector('a[href*="/maps/org/"]');
+                        if (!nameLink) continue;
+                        const href = nameLink.getAttribute('href') || '';
+                        const m = href.match(/\/maps\/org\/[^\/]+\/(\d+)\//) || href.match(/\/maps\/org\/(\d+)/);
+                        if (!m) continue;
+                        const businessId = m[1];
+                        const name = (nameLink.textContent || '').trim();
+
+                        const ratingEl = li.querySelector('.business-rating-badge-view__rating-text');
+                        const rating = ratingEl ? (ratingEl.textContent || '').trim() : null;
+
+                        const countEl = li.querySelector('.business-rating-with-text-view__count');
+                        const reviewCountRaw = countEl ? (countEl.textContent || '').trim() : null;
+
+                        const addrLink = li.querySelector('a[href*="/house/"]');
+                        const address = addrLink ? (addrLink.textContent || '').trim() : '';
+
+                        out.push({ businessId, href, name, rating, reviewCountRaw, address });
+                    } catch (e) { /* skip bad card */ }
+                }
+                return JSON.stringify(out);
+            }
+        """);
+
+        using var doc = JsonDocument.Parse(json);
         var results = new List<SearchBranchResult>();
-
-        var cards = await page.QuerySelectorAllAsync("[class*='search-snippet-view']");
-
-        foreach (var card in cards)
+        foreach (var el in doc.RootElement.EnumerateArray())
         {
             ct.ThrowIfCancellationRequested();
 
-            try
+            var businessId = el.GetProperty("businessId").GetString();
+            if (string.IsNullOrEmpty(businessId)) continue;
+
+            var href = el.GetProperty("href").GetString() ?? "";
+            var name = el.GetProperty("name").GetString() ?? "";
+            var address = el.GetProperty("address").GetString() ?? "";
+            var ratingStr = el.GetProperty("rating").GetString();
+            var reviewCountRaw = el.GetProperty("reviewCountRaw").GetString();
+
+            double? rating = null;
+            if (!string.IsNullOrEmpty(ratingStr)
+                && double.TryParse(ratingStr.Replace(',', '.'),
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var parsed))
+                rating = parsed;
+
+            int? reviewCount = null;
+            if (!string.IsNullOrEmpty(reviewCountRaw))
             {
-                var nameEl = await card.QuerySelectorAsync("[class*='search-business-snippet-view__title']");
-                var name = nameEl != null ? (await nameEl.InnerTextAsync()).Trim() : "";
-
-                var addressEl = await card.QuerySelectorAsync("[class*='search-business-snippet-view__address']");
-                var address = addressEl != null ? (await addressEl.InnerTextAsync()).Trim() : "";
-
-                var linkEl = await card.QuerySelectorAsync("a[href*='/org/']");
-                var href = linkEl != null ? await linkEl.GetAttributeAsync("href") ?? "" : "";
-
-                var businessId = ExtractBusinessIdFromUrl(href);
-                if (string.IsNullOrEmpty(businessId))
-                    continue;
-
-                var externalUrl = href.StartsWith("http")
-                    ? href
-                    : $"https://yandex.ru{href}";
-
-                var ratingEl = await card.QuerySelectorAsync("[class*='business-rating-badge-view__rating']");
-                double? rating = null;
-                if (ratingEl != null)
-                {
-                    var ratingText = await ratingEl.InnerTextAsync();
-                    if (double.TryParse(ratingText.Replace(',', '.'),
-                        System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        out var parsed))
-                        rating = parsed;
-                }
-
-                var reviewCountEl = await card.QuerySelectorAsync("[class*='business-rating-badge-view__rating-count']");
-                int? reviewCount = null;
-                if (reviewCountEl != null)
-                {
-                    var countText = await reviewCountEl.InnerTextAsync();
-                    var digits = ReviewCountDigitsRegex().Replace(countText, "");
-                    if (int.TryParse(digits, out var cnt))
-                        reviewCount = cnt;
-                }
-
-                results.Add(new SearchBranchResult(
-                    Source: SourceType.YandexMaps,
-                    ExternalId: businessId,
-                    ExternalUrl: externalUrl,
-                    Name: name,
-                    Address: address,
-                    Rating: rating,
-                    ReviewCount: reviewCount));
+                var digits = ReviewCountDigitsRegex().Replace(reviewCountRaw, "");
+                if (!string.IsNullOrEmpty(digits) && int.TryParse(digits, out var cnt))
+                    reviewCount = cnt;
             }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Failed to parse a search card, skipping");
-            }
+
+            results.Add(new SearchBranchResult(
+                Source: SourceType.YandexMaps,
+                ExternalId: businessId,
+                ExternalUrl: href.StartsWith("http") ? href : $"https://yandex.ru{href}",
+                Name: name,
+                Address: address,
+                Rating: rating,
+                ReviewCount: reviewCount));
         }
 
         return results;
     }
 
-    private static string? ExtractBusinessIdFromUrl(string url)
+    private async Task<SearchBranchResult?> ExtractSingleOrgAsync(IPage page, string businessId, CancellationToken ct)
     {
-        var match = BusinessIdRegex().Match(url);
-        return match.Success ? match.Groups[1].Value : null;
+        var json = await page.EvaluateAsync<string>("""
+            () => {
+                const h1 = document.querySelector('h1') || document.querySelector('[class*="card-title-view__title"]');
+                const name = h1 ? (h1.textContent || '').trim() : '';
+
+                const ratingEl = document.querySelector('.business-rating-badge-view__rating-text');
+                const rating = ratingEl ? (ratingEl.textContent || '').trim() : null;
+
+                const countEl = document.querySelector('.business-rating-amount-view')
+                    || document.querySelector('.business-header-rating-view__text');
+                const reviewCountRaw = countEl ? (countEl.textContent || '').trim() : null;
+
+                const addrEl = document.querySelector('a[href*="/house/"]')
+                    || document.querySelector('.business-contacts-view__address');
+                const address = addrEl ? (addrEl.textContent || '').trim() : '';
+
+                return JSON.stringify({ name, rating, reviewCountRaw, address });
+            }
+        """);
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        var name = root.GetProperty("name").GetString() ?? "";
+        var address = root.GetProperty("address").GetString() ?? "";
+        var ratingStr = root.GetProperty("rating").GetString();
+        var reviewCountRaw = root.GetProperty("reviewCountRaw").GetString();
+
+        double? rating = null;
+        if (!string.IsNullOrEmpty(ratingStr)
+            && double.TryParse(ratingStr.Replace(',', '.'),
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var parsed))
+            rating = parsed;
+
+        int? reviewCount = null;
+        if (!string.IsNullOrEmpty(reviewCountRaw))
+        {
+            var digits = ReviewCountDigitsRegex().Replace(reviewCountRaw, "");
+            if (!string.IsNullOrEmpty(digits) && int.TryParse(digits, out var cnt))
+                reviewCount = cnt;
+        }
+
+        if (string.IsNullOrEmpty(name)) return null;
+
+        return new SearchBranchResult(
+            Source: SourceType.YandexMaps,
+            ExternalId: businessId,
+            ExternalUrl: page.Url,
+            Name: name,
+            Address: address,
+            Rating: rating,
+            ReviewCount: reviewCount);
     }
 
     private static bool IsTransient(Exception ex)
@@ -300,8 +370,8 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
         _ => ProxyFailureReason.ServerError
     };
 
-    [GeneratedRegex(@"/org/[^/]*/(\d+)/|/org/(\d+)")]
-    private static partial Regex BusinessIdRegex();
+    [GeneratedRegex(@"/maps/org/(?:[^/]+/)?(\d+)")]
+    private static partial Regex DirectOrgUrlRegex();
 
     [GeneratedRegex(@"[^\d]")]
     private static partial Regex ReviewCountDigitsRegex();

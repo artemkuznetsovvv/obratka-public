@@ -62,6 +62,10 @@ builder.Services.Configure<TwoGisOptions>(
     builder.Configuration.GetSection(TwoGisOptions.SectionName));
 builder.Services.AddHttpClient("2gis");
 
+// --- GoogleMaps configuration ---
+builder.Services.Configure<GoogleMapsOptions>(
+    builder.Configuration.GetSection(GoogleMapsOptions.SectionName));
+
 // --- Core ---
 builder.Services.AddScoped<ITaskRepository, SqliteTaskRepository>();
 builder.Services.AddScoped<CollectionTaskOrchestrator>();

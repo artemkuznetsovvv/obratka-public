@@ -1,21 +1,383 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.Extensions.Options;
+using Microsoft.Playwright;
 using ParserService.Core;
 using ParserService.Core.Models;
+using ParserService.Infrastructure.Browser;
+using ParserService.Infrastructure.Proxy;
+using ParserService.Infrastructure.RateLimiting;
+using ParserService.Infrastructure.Stealth;
 
 namespace ParserService.Sources.GoogleMaps;
 
 public class GoogleMapsPlugin : IReviewSourcePlugin
 {
+    private readonly IBrowserPool _browserPool;
+    private readonly IProxyRotator _proxyRotator;
+    private readonly IStealthConfigurator _stealthConfigurator;
+    private readonly IPerSourceRateLimiter _rateLimiter;
+    private readonly GoogleMapsOptions _options;
+    private readonly ILogger<GoogleMapsPlugin> _logger;
+
+    public GoogleMapsPlugin(
+        IBrowserPool browserPool,
+        IProxyRotator proxyRotator,
+        IStealthConfigurator stealthConfigurator,
+        IPerSourceRateLimiter rateLimiter,
+        IOptions<GoogleMapsOptions> options,
+        ILogger<GoogleMapsPlugin> logger)
+    {
+        _browserPool = browserPool;
+        _proxyRotator = proxyRotator;
+        _stealthConfigurator = stealthConfigurator;
+        _rateLimiter = rateLimiter;
+        _options = options.Value;
+        _logger = logger;
+    }
+
     public SourceType Source => SourceType.GoogleMaps;
 
-    public Task<IReadOnlyList<SearchBranchResult>> SearchBranchesAsync(
-        CompanySearchRequest request, CancellationToken ct)
-    {
-        return Task.FromResult<IReadOnlyList<SearchBranchResult>>([]);
-    }
-
-    public Task<IReadOnlyList<RawReview>> FetchReviewsAsync(
+    public async Task<IReadOnlyList<RawReview>> FetchReviewsAsync(
         BranchTarget branch, DateRange period, CancellationToken ct)
     {
-        throw new NotImplementedException("Google Maps plugin not yet implemented");
+        _logger.LogInformation(
+            "[GMaps] === Начинаю сбор отзывов === ExternalId={ExternalId}, период: {From} — {To}, режим: {Mode}",
+            branch.ExternalId, period.From, period.To, _options.CollectionMode);
+
+        await _rateLimiter.WaitAsync(SourceType.GoogleMaps, ct);
+
+        IReadOnlyList<RawReview>? reviews = null;
+        Exception? lastException = null;
+
+        for (int attempt = 1; attempt <= _options.MaxRetries; attempt++)
+        {
+            _logger.LogInformation("[GMaps] Попытка {Attempt}/{Max} для {ExternalId}",
+                attempt, _options.MaxRetries, branch.ExternalId);
+
+            try
+            {
+                reviews = _options.CollectionMode switch
+                {
+                    GoogleMapsCollectionMode.BrowserScroll => await CollectViaBrowserAsync(branch, period, ct),
+                    GoogleMapsCollectionMode.HybridScroll => await CollectViaHybridAsync(branch, period, ct),
+                    _ => await CollectViaHybridAsync(branch, period, ct)
+                };
+
+                _logger.LogInformation("[GMaps] Попытка {Attempt} успешна: {Count} отзывов",
+                    attempt, reviews.Count);
+                break;
+            }
+            catch (Exception ex) when (attempt < _options.MaxRetries && IsTransient(ex))
+            {
+                lastException = ex;
+                _logger.LogWarning(ex,
+                    "[GMaps] Попытка {Attempt}/{Max} провалена: {Message}. Повтор...",
+                    attempt, _options.MaxRetries, ex.Message);
+
+                var backoff = (int)Math.Pow(2, attempt) * 1000;
+                await Task.Delay(backoff, ct);
+            }
+        }
+
+        if (reviews == null)
+            throw lastException ?? new InvalidOperationException("Failed to collect Google Maps reviews");
+
+        if (reviews.Count < 5)
+            _logger.LogWarning("[GMaps] Мало отзывов: {Count} < 5 для {ExternalId}",
+                reviews.Count, branch.ExternalId);
+
+        _logger.LogInformation("[GMaps] === Сбор завершён === {ExternalId}: {Count} отзывов",
+            branch.ExternalId, reviews.Count);
+        return reviews;
     }
+
+    public async Task<IReadOnlyList<SearchBranchResult>> SearchBranchesAsync(
+        CompanySearchRequest request, CancellationToken ct)
+    {
+        _logger.LogInformation("[GMaps] === Поиск организаций === запрос='{Query}', город='{City}'",
+            request.Query, request.City);
+
+        await _rateLimiter.WaitAsync(SourceType.GoogleMaps, ct);
+
+        var proxy = await _proxyRotator.GetProxyAsync(SourceType.GoogleMaps, ct);
+        var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
+        try
+        {
+            await _stealthConfigurator.ApplyStealthAsync(browserContext, ct);
+            var page = await browserContext.NewPageAsync();
+            try
+            {
+                var searchQuery = string.IsNullOrEmpty(request.City)
+                    ? request.Query
+                    : $"{request.Query} {request.City}";
+
+                // Google Maps search works with raw UTF-8 + spaces as '+'
+                // Uri.EscapeDataString percent-encodes Cyrillic which breaks search
+                var searchUrl = "https://www.google.com/maps/search/" + searchQuery.Replace(' ', '+');
+                _logger.LogDebug("[GMaps] Открываю поиск: {Url}", searchUrl);
+
+                await page.GotoAsync(searchUrl, new PageGotoOptions
+                {
+                    WaitUntil = WaitUntilState.DOMContentLoaded,
+                    Timeout = _options.NavigationTimeoutMs
+                });
+                await GoogleMapsConsentHelper.DismissConsentIfNeededAsync(page, _logger, ct);
+                await Task.Delay(Random.Shared.Next(2000, 4000), ct);
+
+                var results = await ExtractSearchResultsAsync(page);
+                _logger.LogInformation("[GMaps] === Поиск завершён === найдено {Count} для '{Query}'",
+                    results.Count, request.Query);
+                return results;
+            }
+            finally
+            {
+                await page.CloseAsync();
+            }
+        }
+        catch (Exception ex) when (proxy != null)
+        {
+            await _proxyRotator.ReportFailureAsync(proxy, ClassifyFailure(ex));
+            throw;
+        }
+        finally
+        {
+            await _browserPool.ReleaseAsync(browserContext);
+            if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
+        }
+    }
+
+    // ---- Private: collection strategies ----
+
+    private async Task<IReadOnlyList<RawReview>> CollectViaBrowserAsync(
+        BranchTarget branch, DateRange period, CancellationToken ct)
+    {
+        var proxy = await _proxyRotator.GetProxyAsync(SourceType.GoogleMaps, ct);
+        var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
+        try
+        {
+            await _stealthConfigurator.ApplyStealthAsync(browserContext, StealthProfile.Moderate, ct);
+
+            var placeUrl = BuildPlaceUrl(branch);
+            var collector = new GoogleMapsBrowserCollector(_options, _logger);
+            return await collector.CollectAllReviewsAsync(browserContext, placeUrl, branch, period, ct);
+        }
+        catch (Exception ex) when (proxy != null)
+        {
+            var reason = ClassifyFailure(ex);
+            _logger.LogWarning("[GMaps] Proxy {Host}:{Port} failure: {Reason}",
+                proxy.Host, proxy.Port, reason);
+            await _proxyRotator.ReportFailureAsync(proxy, reason);
+            throw;
+        }
+        finally
+        {
+            await _browserPool.ReleaseAsync(browserContext);
+            if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
+        }
+    }
+
+    private async Task<IReadOnlyList<RawReview>> CollectViaHybridAsync(
+        BranchTarget branch, DateRange period, CancellationToken ct)
+    {
+        var proxy = await _proxyRotator.GetProxyAsync(SourceType.GoogleMaps, ct);
+        var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
+        try
+        {
+            await _stealthConfigurator.ApplyStealthAsync(browserContext, StealthProfile.Moderate, ct);
+
+            var placeUrl = BuildPlaceUrl(branch);
+            var collector = new GoogleMapsHybridCollector(_options, _logger);
+            return await collector.CollectAllReviewsAsync(browserContext, placeUrl, branch, period, ct);
+        }
+        catch (Exception ex) when (proxy != null)
+        {
+            var reason = ClassifyFailure(ex);
+            _logger.LogWarning("[GMaps] Proxy {Host}:{Port} failure: {Reason}",
+                proxy.Host, proxy.Port, reason);
+            await _proxyRotator.ReportFailureAsync(proxy, reason);
+            throw;
+        }
+        finally
+        {
+            await _browserPool.ReleaseAsync(browserContext);
+            if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
+        }
+    }
+
+    // ---- Private: helpers ----
+
+    /// <summary>
+    /// Build place URL from BranchTarget.
+    /// Priority: ExternalUrl → FID via data= param → fallback search.
+    /// </summary>
+    private static string BuildPlaceUrl(BranchTarget branch)
+    {
+        if (!string.IsNullOrEmpty(branch.ExternalUrl)
+            && branch.ExternalUrl.Contains("google.com/maps", StringComparison.OrdinalIgnoreCase))
+            return branch.ExternalUrl;
+
+        // FID format: 0x{hex}:0x{hex} — open full place page via data= parameter.
+        // Google resolves coordinates and loads complete card with Reviews tab.
+        if (IsFid(branch.ExternalId))
+            return $"https://www.google.com/maps/place/x/data=!3m1!4b1!4m2!3m1!1s{branch.ExternalId}";
+
+        return "https://www.google.com/maps/search/" + branch.ExternalId.Replace(' ', '+');
+    }
+
+    private static bool IsFid(string value) =>
+        value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && value.Contains(':');
+
+    private static bool IsTransient(Exception ex)
+    {
+        if (ex is TimeoutException)
+            return true;
+        if (ex is PlaywrightException pe)
+            return pe.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase)
+                || pe.Message.Contains("net::", StringComparison.OrdinalIgnoreCase);
+        return false;
+    }
+
+    private static ProxyFailureReason ClassifyFailure(Exception ex) => ex switch
+    {
+        TimeoutException => ProxyFailureReason.Timeout,
+        PlaywrightException pe when pe.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase)
+            => ProxyFailureReason.Timeout,
+        PlaywrightException pe when pe.Message.Contains("net::", StringComparison.OrdinalIgnoreCase)
+            => ProxyFailureReason.ConnectionError,
+        _ => ProxyFailureReason.ServerError
+    };
+
+    // ---- Private: search ----
+
+    private async Task<IReadOnlyList<SearchBranchResult>> ExtractSearchResultsAsync(IPage page)
+    {
+        var json = await page.EvaluateAsync<string>("""
+            () => {
+                const results = [];
+                const feed = document.querySelector('[role="feed"]');
+
+                // Case 1: search returned a list of results
+                if (feed) {
+                    const cards = feed.querySelectorAll('.Nv2PK');
+                    for (const card of cards) {
+                        const link = card.querySelector('a.hfpxzc');
+                        if (!link) continue;
+
+                        const href = link.getAttribute('href') || '';
+                        const ariaLabel = link.getAttribute('aria-label') || '';
+
+                        // FID from URL: !1s0x...:0x...
+                        const fidMatch = href.match(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/i);
+                        const fid = fidMatch ? fidMatch[1] : null;
+                        if (!fid) continue;
+
+                        // Name
+                        const nameEl = card.querySelector('.qBF1Pd');
+                        const name = nameEl?.textContent?.trim() || ariaLabel || '';
+
+                        // Rating + review count from role="img" aria-label
+                        // Format: "4,6-звездочные Отзывов: 2 199" or "4.6 stars 2,199 Reviews"
+                        const ratingEl = card.querySelector('[role="img"][aria-label]');
+                        let rating = null;
+                        let reviewCount = null;
+                        if (ratingEl) {
+                            const label = ratingEl.getAttribute('aria-label') || '';
+                            const rMatch = label.match(/([\d]+[,.][\d]+)/);
+                            if (rMatch) rating = parseFloat(rMatch[1].replace(',', '.'));
+                            // Review count: digit groups (with spaces) — "Отзывов: 2 199" or "2,199 Reviews"
+                            const cMatch = label.match(/(\d[\d\s,.]*\d)/g);
+                            if (cMatch) {
+                                // Last digit group is the review count
+                                reviewCount = parseInt(cMatch[cMatch.length - 1].replace(/[\s,.]/g, ''));
+                            }
+                        }
+
+                        // Address: find leaf .W4Efsd (no child .W4Efsd) with ·, skip hours
+                        let address = '';
+                        const w4els = card.querySelectorAll('.W4Efsd');
+                        for (const el of w4els) {
+                            // Skip parent containers that have nested .W4Efsd
+                            if (el.querySelector('.W4Efsd')) continue;
+                            const t = el.textContent || '';
+                            if (!t.includes('·')) continue;
+                            // Skip hours rows
+                            if (/Откроется|Открыто|Закрыто|Opens|Closes|Open/i.test(t)) continue;
+                            // Split by · and take last part as address
+                            const parts = t.split('·').map(p => p.trim()).filter(p => p.length > 0);
+                            if (parts.length >= 2) {
+                                address = parts[parts.length - 1];
+                                break;
+                            }
+                        }
+
+                        results.push({ fid, name, address, href, rating, reviewCount });
+                        if (results.length >= 20) break;
+                    }
+                    return JSON.stringify(results);
+                }
+
+                // Case 2: search redirected directly to a place page
+                const url = window.location.href;
+                const fidMatch = url.match(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/i);
+                if (fidMatch) {
+                    const fid = fidMatch[1];
+                    const nameEl = document.querySelector('h1');
+                    const name = nameEl?.textContent?.trim() || '';
+
+                    // Rating from place page
+                    const ratingEl = document.querySelector('[role="img"][aria-label*="звездочн"], [role="img"][aria-label*="star"]');
+                    let rating = null;
+                    let reviewCount = null;
+                    if (ratingEl) {
+                        const label = ratingEl.getAttribute('aria-label') || '';
+                        const rMatch = label.match(/([\d]+[,.][\d]+)/);
+                        if (rMatch) rating = parseFloat(rMatch[1].replace(',', '.'));
+                    }
+                    // Review count: "Ещё отзывы (2 616)" or "More reviews (2,616)"
+                    const allBtns = document.querySelectorAll('button');
+                    for (const btn of allBtns) {
+                        const label = btn.getAttribute('aria-label') || btn.textContent || '';
+                        const m = label.match(/(?:отзыв|review)[^\d]*\(?([\d\s,.]+)\)?/i)
+                            || label.match(/\(([\d\s,.]+)\)\s*$/);
+                        if (m) {
+                            reviewCount = parseInt(m[1].replace(/[\s,.]/g, ''));
+                            if (reviewCount > 0) break;
+                        }
+                    }
+
+                    // Address
+                    const addrEl = document.querySelector('[data-item-id="address"] .fontBodyMedium')
+                        || document.querySelector('button[data-item-id="address"]');
+                    const address = addrEl?.textContent?.trim() || '';
+
+                    results.push({ fid, name, address, href: url, rating, reviewCount });
+                }
+
+                return JSON.stringify(results);
+            }
+        """);
+
+        var items = JsonSerializer.Deserialize<List<SearchResultJson>>(json) ?? [];
+
+        return items
+            .Where(r => !string.IsNullOrEmpty(r.Fid))
+            .Select(r => new SearchBranchResult(
+                Source: SourceType.GoogleMaps,
+                ExternalId: r.Fid!,
+                ExternalUrl: r.Href ?? "",
+                Name: r.Name ?? "",
+                Address: r.Address ?? "",
+                Rating: r.Rating,
+                ReviewCount: r.ReviewCount))
+            .ToList();
+    }
+
+    private record SearchResultJson(
+        [property: JsonPropertyName("fid")] string? Fid,
+        [property: JsonPropertyName("name")] string? Name,
+        [property: JsonPropertyName("address")] string? Address,
+        [property: JsonPropertyName("href")] string? Href,
+        [property: JsonPropertyName("rating")] double? Rating,
+        [property: JsonPropertyName("reviewCount")] int? ReviewCount);
 }

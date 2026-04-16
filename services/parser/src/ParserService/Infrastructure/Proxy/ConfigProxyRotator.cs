@@ -23,6 +23,9 @@ public class ProxyEntry
     public int Port { get; set; }
     public string? Username { get; set; }
     public string? Password { get; set; }
+
+    /// <summary>Proxy protocol: "http" (default), "https", or "socks5".</summary>
+    public string Protocol { get; set; } = "http";
 }
 
 public class ConfigProxyRotator : IProxyRotator
@@ -38,7 +41,7 @@ public class ConfigProxyRotator : IProxyRotator
         _logger = logger;
         _proxyOptions = options.Value;
         _proxies = _proxyOptions.Servers
-            .Select(e => new ProxyInfo(e.Host, e.Port, e.Username, e.Password))
+            .Select(e => new ProxyInfo(e.Host, e.Port, e.Username, e.Password, NormalizeProtocol(e.Protocol)))
             .ToList();
 
         if (_proxies.Count == 0)
@@ -109,6 +112,18 @@ public class ConfigProxyRotator : IProxyRotator
     }
 
     private static string ProxyKey(ProxyInfo proxy) => $"{proxy.Host}:{proxy.Port}";
+
+    private static string NormalizeProtocol(string? protocol)
+    {
+        var p = (protocol ?? "http").Trim().ToLowerInvariant();
+        return p switch
+        {
+            "http" or "https" or "socks5" => p,
+            "socks" => "socks5",
+            _ => throw new InvalidOperationException(
+                $"Unsupported proxy protocol '{protocol}'. Allowed: http, https, socks5.")
+        };
+    }
 
     private sealed class ProxyHealthState
     {

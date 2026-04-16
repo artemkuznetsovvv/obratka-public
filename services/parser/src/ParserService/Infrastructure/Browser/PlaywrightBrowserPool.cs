@@ -71,7 +71,7 @@ public class PlaywrightBrowserPool : IBrowserPool, IAsyncDisposable
             {
                 contextOptions.Proxy = new Microsoft.Playwright.Proxy
                 {
-                    Server = $"http://{proxy.Host}:{proxy.Port}",
+                    Server = proxy.Url,
                     Username = proxy.Username,
                     Password = proxy.Password
                 };

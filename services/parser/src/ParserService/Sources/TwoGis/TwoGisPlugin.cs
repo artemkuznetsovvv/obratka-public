@@ -126,16 +126,14 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
             var page = await browserContext.NewPageAsync();
             try
             {
-                var searchQuery = string.IsNullOrEmpty(request.City)
-                    ? request.Query
-                    : $"{request.Query} {request.City}";
-
-                var searchUrl = $"https://2gis.ru/search/{Uri.EscapeDataString(searchQuery)}";
+                var citySlug = MapCityToSlug(request.City);
+                var encodedQuery = Uri.EscapeDataString(request.Query);
+                var searchUrl = $"https://2gis.ru/{citySlug}/search/{encodedQuery}";
                 _logger.LogDebug("[2GIS] Открываю поиск: {Url}", searchUrl);
 
                 await page.GotoAsync(searchUrl, new PageGotoOptions
                 {
-                    WaitUntil = WaitUntilState.NetworkIdle,
+                    WaitUntil = WaitUntilState.DOMContentLoaded,
                     Timeout = _options.NavigationTimeoutMs
                 });
                 await Task.Delay(Random.Shared.Next(2000, 4000), ct);
@@ -302,25 +300,59 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
         if (proxy == null)
             return new HttpClient();
 
-        var webProxy = new WebProxy(proxy.Host, proxy.Port);
+        var webProxy = new WebProxy(new Uri(proxy.Url));
         if (!string.IsNullOrEmpty(proxy.Username))
             webProxy.Credentials = new NetworkCredential(proxy.Username, proxy.Password);
 
-        return new HttpClient(new HttpClientHandler { Proxy = webProxy, UseProxy = true });
+        return new HttpClient(new SocketsHttpHandler { Proxy = webProxy, UseProxy = true });
     }
 
     // ---- Private: search ----
 
+    private static string MapCityToSlug(string? city)
+    {
+        if (string.IsNullOrWhiteSpace(city)) return "moscow";
+        var lower = city.Trim().ToLowerInvariant();
+        return lower switch
+        {
+            "москва" or "moscow" => "moscow",
+            "санкт-петербург" or "спб" or "saint-petersburg" or "spb" => "spb",
+            "новосибирск" or "novosibirsk" => "novosibirsk",
+            "екатеринбург" or "yekaterinburg" or "ekaterinburg" => "ekaterinburg",
+            "казань" or "kazan" => "kazan",
+            "нижний новгород" or "nizhny novgorod" => "nizhny_novgorod",
+            "челябинск" or "chelyabinsk" => "chelyabinsk",
+            "самара" or "samara" => "samara",
+            "омск" or "omsk" => "omsk",
+            "ростов-на-дону" or "rostov" => "rostov",
+            "уфа" or "ufa" => "ufa",
+            "красноярск" or "krasnoyarsk" => "krasnoyarsk",
+            "пермь" or "perm" => "perm",
+            "воронеж" or "voronezh" => "voronezh",
+            "волгоград" or "volgograd" => "volgograd",
+            _ => lower.Replace(' ', '_')
+        };
+    }
+
     private async Task<IReadOnlyList<SearchBranchResult>> ExtractSearchResultsAsync(
         IPage page, CancellationToken ct)
     {
-        // 2GIS dynamic CSS — используем JS для извлечения данных из карточек
+        // 2GIS: dynamic CSS-классы меняются между деплоями.
+        // Стабильный якорь: a[href*="/firm/"]. Карточка = link.parentElement.parentElement (класс _1kf6gff на апр-2026).
+        // Дочерние: [0]=название, [1]=категория, [2]="4.91177 оценок" слитно, [3]=адрес (+ "X филиалов" иногда).
         var json = await page.EvaluateAsync<string>("""
             () => {
                 const results = [];
-                // Карточки результатов поиска — ищем ссылки с /firm/ в href
-                const links = document.querySelectorAll('a[href*="/firm/"]');
                 const seen = new Set();
+                const links = document.querySelectorAll('a[href*="/firm/"]');
+
+                const cleanAddress = (s) => {
+                    if (!s) return '';
+                    // Удаляем zero-width chars и обрезаем хвост "N филиалов/филиал/филиала"
+                    let t = s.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+                    t = t.replace(/\s*\d+\s+филиал\w*\s*$/i, '').trim();
+                    return t;
+                };
 
                 for (const link of links) {
                     const href = link.getAttribute('href') || '';
@@ -329,32 +361,36 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
 
                     const firmId = firmMatch[1];
                     if (seen.has(firmId)) continue;
+
+                    const card = link.parentElement?.parentElement;
+                    if (!card || !card.children || card.children.length < 2) continue;
+
+                    const name = (link.textContent || '').trim();
+                    if (!name || name.length > 200) continue;
                     seen.add(firmId);
 
-                    // Ищем ближайший контейнер карточки
-                    const card = link.closest('[data-name]') || link.closest('article')
-                        || link.parentElement?.parentElement?.parentElement;
-                    if (!card) continue;
-
-                    const name = link.textContent?.trim() || '';
-                    if (!name || name.length > 200) continue;
-
-                    // Адрес — обычно следующий текстовый элемент
-                    const allText = card.querySelectorAll('*');
-                    let address = '';
                     let rating = null;
                     let reviewCount = null;
+                    let address = '';
 
-                    for (const el of allText) {
-                        const t = (el.textContent || '').trim();
-                        // Рейтинг — число от 1.0 до 5.0
-                        if (!rating && /^\d\.\d$/.test(t)) {
-                            rating = parseFloat(t);
+                    for (const ch of card.children) {
+                        const t = (ch.textContent || '').trim();
+                        if (!t) continue;
+
+                        // Рейтинг + кол-во: "4.91177 оценок" — разделителя нет, рейтинг всегда X.X в начале
+                        if (rating === null) {
+                            const rm = t.match(/^(\d[.,]\d)(.*)$/);
+                            if (rm) {
+                                rating = parseFloat(rm[1].replace(',', '.'));
+                                const cm = rm[2].match(/(\d[\d\s\u00A0]*)\s*(?:оцен|отзыв|review)/i);
+                                if (cm) reviewCount = parseInt(cm[1].replace(/[\s\u00A0]/g, ''));
+                                continue;
+                            }
                         }
-                        // Кол-во отзывов — "123 отзыва" или "1.2K отзывов"
-                        const revMatch = t.match(/^(\d[\d\s]*)\s*(отзыв|review)/i);
-                        if (revMatch) {
-                            reviewCount = parseInt(revMatch[1].replace(/\s/g, ''));
+
+                        // Адрес: содержит запятую, не часы/статус
+                        if (!address && t.includes(',') && !/^закрыт|^открыт|\d{1,2}:\d{2}/i.test(t)) {
+                            address = cleanAddress(t);
                         }
                     }
 
