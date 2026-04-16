@@ -94,6 +94,7 @@ public class CollectionTasksController : ControllerBase
     /// GET /api/collection-tasks/qa/fingerprint?profile=Moderate
     /// </summary>
     [HttpGet("qa/fingerprint")]
+    [RequireQaApiKey]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> QaFingerprint(
@@ -217,6 +218,7 @@ public class CollectionTasksController : ControllerBase
     /// Перехватывает все запросы к public-api.reviews.2gis.com и возвращает тела ответов.
     /// </summary>
     [HttpGet("qa/2gis-explore")]
+    [RequireQaApiKey]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> Qa2GisExplore(
@@ -324,6 +326,7 @@ public class CollectionTasksController : ControllerBase
     /// Возвращает статус, финальный URL после редиректов, латентность и ошибку по каждой цели.
     /// </summary>
     [HttpGet("qa/proxy-health")]
+    [RequireQaApiKey]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> QaProxyHealth(
@@ -448,6 +451,7 @@ public class CollectionTasksController : ControllerBase
     /// Перехватывает console, pageerror, requestfailed — покажет cert/tunnel/blocked ошибки Chromium.
     /// </summary>
     [HttpGet("qa/proxy-browser")]
+    [RequireQaApiKey]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> QaProxyBrowser(
@@ -565,6 +569,7 @@ public class CollectionTasksController : ControllerBase
     /// именно этот домен, и никакая настройка Chromium не поможет.
     /// </summary>
     [HttpGet("qa/proxy-connect")]
+    [RequireQaApiKey]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> QaProxyConnect(
@@ -683,6 +688,7 @@ public class CollectionTasksController : ControllerBase
     /// GET /api/collection-tasks/qa/yandex/{businessId}?date_from=2024-01-01
     /// </summary>
     [HttpGet("qa/{source}/{externalId}")]
+    [RequireQaApiKey]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
