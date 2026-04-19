@@ -32,4 +32,21 @@ public class SqliteTaskRepository : ITaskRepository
         _db.CollectionTasks.Update(task);
         await _db.SaveChangesAsync(ct);
     }
+
+    public async Task<IReadOnlyList<CollectionTask>> ListAsync(
+        CollectionTaskStatus? status,
+        SourceType? source,
+        int limit,
+        int offset,
+        CancellationToken ct)
+    {
+        var query = _db.CollectionTasks.AsNoTracking();
+        if (status.HasValue) query = query.Where(t => t.Status == status.Value);
+        if (source.HasValue) query = query.Where(t => t.Source == source.Value);
+        return await query
+            .OrderByDescending(t => t.CreatedAt)
+            .Skip(offset)
+            .Take(limit)
+            .ToListAsync(ct);
+    }
 }

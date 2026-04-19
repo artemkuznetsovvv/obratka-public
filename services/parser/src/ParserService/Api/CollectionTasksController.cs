@@ -67,6 +67,52 @@ public class CollectionTasksController : ControllerBase
         return AcceptedAtAction(nameof(GetStatus), new { taskId }, new CreateCollectionTaskResponse(taskId));
     }
 
+    [HttpGet]
+    [ProducesResponseType(typeof(CollectionTaskListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<CollectionTaskListResponse>> List(
+        [FromQuery] string? status,
+        [FromQuery] string? source,
+        [FromQuery] int? limit,
+        [FromQuery] int? offset,
+        CancellationToken ct)
+    {
+        CollectionTaskStatus? statusFilter = null;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            if (!Enum.TryParse<CollectionTaskStatus>(status, true, out var parsedStatus))
+                return BadRequest(new { error = $"Unknown status: '{status}'. Allowed: pending, running, completed, failed" });
+            statusFilter = parsedStatus;
+        }
+
+        SourceType? sourceFilter = null;
+        if (!string.IsNullOrWhiteSpace(source))
+        {
+            if (!SourceTypeExtensions.TryFromSlug(source, out var parsedSource))
+                return BadRequest(new { error = $"Unknown source: '{source}'" });
+            sourceFilter = parsedSource;
+        }
+
+        var take = Math.Clamp(limit ?? 50, 1, 500);
+        var skip = Math.Max(offset ?? 0, 0);
+
+        var tasks = await _repository.ListAsync(statusFilter, sourceFilter, take, skip, ct);
+
+        var items = tasks.Select(t => new CollectionTaskListItem(
+            t.Id,
+            t.JobId,
+            t.CompanyId,
+            t.Source.ToSlug(),
+            t.Status.ToString().ToLowerInvariant(),
+            t.Progress,
+            t.ReviewCount,
+            t.S3Url,
+            t.Error,
+            t.CreatedAt,
+            t.UpdatedAt)).ToList();
+
+        return Ok(new CollectionTaskListResponse(items.Count, take, skip, items));
+    }
+
     [HttpGet("{taskId:guid}")]
     [ProducesResponseType(typeof(CollectionTaskStatusResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -90,13 +136,12 @@ public class CollectionTasksController : ControllerBase
     }
 
     /// <summary>
-    /// QA-endpoint: проверка fingerprint браузера через bot.sannysoft.com. Только в Development.
+    /// QA-endpoint: проверка fingerprint браузера через bot.sannysoft.com.
     /// GET /api/collection-tasks/qa/fingerprint?profile=Moderate
     /// </summary>
     [HttpGet("qa/fingerprint")]
     [RequireQaApiKey]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> QaFingerprint(
         [FromQuery] string? profile,
         [FromQuery] string? source,
@@ -105,10 +150,6 @@ public class CollectionTasksController : ControllerBase
         [FromServices] Infrastructure.Proxy.IProxyRotator proxyRotator,
         CancellationToken ct)
     {
-        if (!_env.IsDevelopment())
-            return StatusCode(StatusCodes.Status403Forbidden,
-                new { error = "QA endpoint is only available in Development" });
-
         var stealthProfile = Enum.TryParse<Infrastructure.Stealth.StealthProfile>(profile, true, out var p)
             ? p
             : Infrastructure.Stealth.StealthProfile.Moderate;
@@ -684,23 +725,19 @@ public class CollectionTasksController : ControllerBase
     }
 
     /// <summary>
-    /// QA-endpoint: прямой вызов плагина по businessId. Только в Development.
+    /// QA-endpoint: прямой вызов плагина по businessId.
     /// GET /api/collection-tasks/qa/yandex/{businessId}?date_from=2024-01-01
     /// </summary>
     [HttpGet("qa/{source}/{externalId}")]
     [RequireQaApiKey]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> QaFetchReviews(
         string source, string externalId,
         [FromQuery] DateTimeOffset? date_from,
         [FromQuery] string? url,
         CancellationToken ct)
     {
-        if (!_env.IsDevelopment())
-            return StatusCode(StatusCodes.Status403Forbidden, new { error = "QA endpoint is only available in Development" });
-
         if (!SourceTypeExtensions.TryFromSlug(source, out var sourceType))
             return BadRequest(new { error = $"Unknown source: '{source}'" });
 
