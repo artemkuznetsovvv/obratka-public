@@ -13,10 +13,26 @@ using ParserService.Infrastructure.Storage;
 using ParserService.Sources.GoogleMaps;
 using ParserService.Sources.TwoGis;
 using ParserService.Sources.YandexMaps;
+using Serilog;
 
 // ReSharper disable RedundantUsingDirective
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseSerilog((ctx, cfg) =>
+{
+    cfg.ReadFrom.Configuration(ctx.Configuration)
+        .Enrich.FromLogContext()
+        .Enrich.WithProperty("Service", "parser-service")
+        .Enrich.WithProperty("Environment", ctx.HostingEnvironment.EnvironmentName)
+        .WriteTo.Console();
+
+    var seqUrl = ctx.Configuration["Seq:ServerUrl"];
+    if (!string.IsNullOrWhiteSpace(seqUrl))
+    {
+        cfg.WriteTo.Seq(seqUrl, apiKey: ctx.Configuration["Seq:ApiKey"]);
+    }
+});
 
 // --- SQLite + EF Core ---
 builder.Services.AddDbContext<ParserDbContext>(options =>
