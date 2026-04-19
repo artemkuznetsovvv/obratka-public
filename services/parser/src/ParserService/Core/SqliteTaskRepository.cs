@@ -43,10 +43,12 @@ public class SqliteTaskRepository : ITaskRepository
         var query = _db.CollectionTasks.AsNoTracking();
         if (status.HasValue) query = query.Where(t => t.Status == status.Value);
         if (source.HasValue) query = query.Where(t => t.Source == source.Value);
-        return await query
+        // SQLite + EF Core не умеет ORDER BY по DateTimeOffset — сортируем на клиенте
+        var rows = await query.ToListAsync(ct);
+        return rows
             .OrderByDescending(t => t.CreatedAt)
             .Skip(offset)
             .Take(limit)
-            .ToListAsync(ct);
+            .ToList();
     }
 }

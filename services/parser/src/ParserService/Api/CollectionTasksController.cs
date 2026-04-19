@@ -170,11 +170,11 @@ public class CollectionTasksController : ControllerBase
             {
                 await page.GotoAsync("https://bot.sannysoft.com/", new Microsoft.Playwright.PageGotoOptions
                 {
-                    WaitUntil = Microsoft.Playwright.WaitUntilState.NetworkIdle,
+                    WaitUntil = Microsoft.Playwright.WaitUntilState.DOMContentLoaded,
                     Timeout = 30_000
                 });
 
-                await Task.Delay(2000, ct);
+                await Task.Delay(5000, ct);
 
                 var results = await page.EvaluateAsync<System.Text.Json.JsonElement>("""
                     () => {
