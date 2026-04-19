@@ -14,8 +14,17 @@ RUN dotnet publish -c Release -o /app/publish /p:UseAppHost=false
 # ===== Runtime stage =====
 # playwright/dotnet содержит Chrome + все системные зависимости (libnss, libasound и т.д.)
 # версия образа должна совпадать с Microsoft.Playwright NuGet (см. ParserService.csproj)
+# Образ v1.58 пока поставляется с .NET 8 runtime — доставляем ASP.NET Core 9 отдельно.
 FROM mcr.microsoft.com/playwright/dotnet:v1.58.0-noble AS final
 WORKDIR /app
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && curl -sSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+ && chmod +x /tmp/dotnet-install.sh \
+ && /tmp/dotnet-install.sh --channel 9.0 --runtime aspnetcore --install-dir /usr/share/dotnet \
+ && rm /tmp/dotnet-install.sh \
+ && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/publish .
 
