@@ -63,7 +63,8 @@ builder.Services.Configure<BrowserPoolOptions>(
 builder.Services.AddSingleton<IBrowserPool, PlaywrightBrowserPool>();
 builder.Services.Configure<ProxyOptions>(
     builder.Configuration.GetSection(ProxyOptions.SectionName));
-builder.Services.AddSingleton<IProxyRotator, ConfigProxyRotator>();
+builder.Services.AddScoped<IProxyRepository, SqliteProxyRepository>();
+builder.Services.AddSingleton<IProxyRotator, DbProxyRotator>();
 builder.Services.AddSingleton<IStealthConfigurator, PlaywrightStealthConfigurator>();
 builder.Services.Configure<RateLimitingOptions>(
     builder.Configuration.GetSection(RateLimitingOptions.SectionName));
