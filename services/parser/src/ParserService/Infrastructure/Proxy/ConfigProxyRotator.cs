@@ -50,7 +50,10 @@ public class ConfigProxyRotator : IProxyRotator
             _logger.LogInformation("Loaded {Count} proxies from configuration", _proxies.Count);
     }
 
-    public Task<ProxyInfo?> GetProxyAsync(SourceType source, CancellationToken ct)
+    public Task<ProxyInfo?> GetProxyAsync(
+        SourceType source,
+        CancellationToken ct,
+        IReadOnlyCollection<ProxyInfo>? exclude = null)
     {
         if (_proxies.Count == 0)
             return Task.FromResult<ProxyInfo?>(null);

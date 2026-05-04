@@ -12,7 +12,10 @@ public class StubProxyRotator : IProxyRotator
         _logger = logger;
     }
 
-    public Task<ProxyInfo?> GetProxyAsync(SourceType source, CancellationToken ct)
+    public Task<ProxyInfo?> GetProxyAsync(
+        SourceType source,
+        CancellationToken ct,
+        IReadOnlyCollection<ProxyInfo>? exclude = null)
     {
         _logger.LogWarning("Proxy rotation is not configured. Running without proxy for {Source}", source);
         return Task.FromResult<ProxyInfo?>(null);

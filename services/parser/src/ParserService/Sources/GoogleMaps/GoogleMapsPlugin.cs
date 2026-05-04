@@ -49,19 +49,22 @@ public class GoogleMapsPlugin : IReviewSourcePlugin
 
         IReadOnlyList<RawReview>? reviews = null;
         Exception? lastException = null;
+        var tried = new List<ProxyInfo>();
 
         for (int attempt = 1; attempt <= _options.MaxRetries; attempt++)
         {
-            _logger.LogInformation("[GMaps] Попытка {Attempt}/{Max} для {ExternalId}",
-                attempt, _options.MaxRetries, branch.ExternalId);
+            var proxy = await _proxyRotator.GetProxyAsync(SourceType.GoogleMaps, ct, tried);
+            _logger.LogInformation("[GMaps] Попытка {Attempt}/{Max} для {ExternalId}, прокси={Proxy}",
+                attempt, _options.MaxRetries, branch.ExternalId,
+                proxy != null ? proxy.DisplayName : "без прокси");
 
             try
             {
                 reviews = _options.CollectionMode switch
                 {
-                    GoogleMapsCollectionMode.BrowserScroll => await CollectViaBrowserAsync(branch, period, ct),
-                    GoogleMapsCollectionMode.HybridScroll => await CollectViaHybridAsync(branch, period, ct),
-                    _ => await CollectViaHybridAsync(branch, period, ct)
+                    GoogleMapsCollectionMode.BrowserScroll => await CollectViaBrowserAsync(branch, period, proxy, ct),
+                    GoogleMapsCollectionMode.HybridScroll => await CollectViaHybridAsync(branch, period, proxy, ct),
+                    _ => await CollectViaHybridAsync(branch, period, proxy, ct)
                 };
 
                 _logger.LogInformation("[GMaps] Попытка {Attempt} успешна: {Count} отзывов",
@@ -71,12 +74,24 @@ public class GoogleMapsPlugin : IReviewSourcePlugin
             catch (Exception ex) when (attempt < _options.MaxRetries && IsTransient(ex))
             {
                 lastException = ex;
+                var reason = ClassifyFailure(ex);
                 _logger.LogWarning(ex,
-                    "[GMaps] Попытка {Attempt}/{Max} провалена: {Message}. Повтор...",
-                    attempt, _options.MaxRetries, ex.Message);
+                    "[GMaps] Попытка {Attempt}/{Max} провалена через прокси {Proxy}: {Reason}. Повтор...",
+                    attempt, _options.MaxRetries,
+                    proxy != null ? proxy.DisplayName : "без прокси", reason);
+
+                if (proxy != null)
+                {
+                    tried.Add(proxy);
+                    await _proxyRotator.ReportFailureAsync(proxy, reason);
+                }
 
                 var backoff = (int)Math.Pow(2, attempt) * 1000;
                 await Task.Delay(backoff, ct);
+            }
+            finally
+            {
+                if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
             }
         }
 
@@ -102,15 +117,16 @@ public class GoogleMapsPlugin : IReviewSourcePlugin
 
         IReadOnlyList<SearchBranchResult>? results = null;
         Exception? lastException = null;
+        var tried = new List<ProxyInfo>();
 
         for (int attempt = 1; attempt <= _options.MaxRetries; attempt++)
         {
-            var proxy = await _proxyRotator.GetProxyAsync(SourceType.GoogleMaps, ct);
+            var proxy = await _proxyRotator.GetProxyAsync(SourceType.GoogleMaps, ct, tried);
             _logger.LogInformation("[GMaps] Поиск: попытка {Attempt}/{Max}, прокси={Proxy}",
                 attempt, _options.MaxRetries,
                 proxy != null ? proxy.DisplayName : "без прокси");
 
-            var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
+            var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy, DisableHttp2: true), ct);
             try
             {
                 await _stealthConfigurator.ApplyStealthAsync(browserContext, ct);
@@ -151,7 +167,10 @@ public class GoogleMapsPlugin : IReviewSourcePlugin
                     attempt, _options.MaxRetries,
                     proxy != null ? proxy.DisplayName : "без прокси", reason);
                 if (proxy != null)
+                {
+                    tried.Add(proxy);
                     await _proxyRotator.ReportFailureAsync(proxy, reason);
+                }
                 var backoff = (int)Math.Pow(2, attempt) * 1000;
                 await Task.Delay(backoff, ct);
             }
@@ -173,10 +192,9 @@ public class GoogleMapsPlugin : IReviewSourcePlugin
     // ---- Private: collection strategies ----
 
     private async Task<IReadOnlyList<RawReview>> CollectViaBrowserAsync(
-        BranchTarget branch, DateRange period, CancellationToken ct)
+        BranchTarget branch, DateRange period, ProxyInfo? proxy, CancellationToken ct)
     {
-        var proxy = await _proxyRotator.GetProxyAsync(SourceType.GoogleMaps, ct);
-        var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
+        var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy, DisableHttp2: true), ct);
         try
         {
             await _stealthConfigurator.ApplyStealthAsync(browserContext, StealthProfile.Moderate, ct);
@@ -185,26 +203,16 @@ public class GoogleMapsPlugin : IReviewSourcePlugin
             var collector = new GoogleMapsBrowserCollector(_options, _logger);
             return await collector.CollectAllReviewsAsync(browserContext, placeUrl, branch, period, ct);
         }
-        catch (Exception ex) when (proxy != null)
-        {
-            var reason = ClassifyFailure(ex);
-            _logger.LogWarning("[GMaps] Proxy {Host}:{Port} failure: {Reason}",
-                proxy.Host, proxy.Port, reason);
-            await _proxyRotator.ReportFailureAsync(proxy, reason);
-            throw;
-        }
         finally
         {
             await _browserPool.ReleaseAsync(browserContext);
-            if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
         }
     }
 
     private async Task<IReadOnlyList<RawReview>> CollectViaHybridAsync(
-        BranchTarget branch, DateRange period, CancellationToken ct)
+        BranchTarget branch, DateRange period, ProxyInfo? proxy, CancellationToken ct)
     {
-        var proxy = await _proxyRotator.GetProxyAsync(SourceType.GoogleMaps, ct);
-        var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
+        var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy, DisableHttp2: true), ct);
         try
         {
             await _stealthConfigurator.ApplyStealthAsync(browserContext, StealthProfile.Moderate, ct);
@@ -213,18 +221,9 @@ public class GoogleMapsPlugin : IReviewSourcePlugin
             var collector = new GoogleMapsHybridCollector(_options, _logger);
             return await collector.CollectAllReviewsAsync(browserContext, placeUrl, branch, period, ct);
         }
-        catch (Exception ex) when (proxy != null)
-        {
-            var reason = ClassifyFailure(ex);
-            _logger.LogWarning("[GMaps] Proxy {Host}:{Port} failure: {Reason}",
-                proxy.Host, proxy.Port, reason);
-            await _proxyRotator.ReportFailureAsync(proxy, reason);
-            throw;
-        }
         finally
         {
             await _browserPool.ReleaseAsync(browserContext);
-            if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
         }
     }
 

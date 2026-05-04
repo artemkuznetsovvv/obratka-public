@@ -638,18 +638,29 @@ public class CollectionTasksController : ControllerBase
         [FromQuery] string? host,
         [FromQuery] int? port,
         [FromQuery] int? timeoutMs,
-        [FromServices] IOptions<ProxyOptions> proxyOptions,
+        [FromQuery] int? id,
+        [FromServices] IProxyRepository proxyRepository,
         CancellationToken ct)
     {
         if (!_env.IsDevelopment())
             return StatusCode(StatusCodes.Status403Forbidden,
                 new { error = "QA endpoint is only available in Development" });
 
-        var servers = proxyOptions.Value.Servers;
-        if (servers.Count == 0)
-            return BadRequest(new { error = "No proxies configured" });
+        Core.Models.ProxyEntity? entry;
+        if (id.HasValue)
+        {
+            entry = await proxyRepository.GetByIdAsync(id.Value, ct);
+            if (entry is null)
+                return NotFound(new { error = $"Proxy id={id} not found" });
+        }
+        else
+        {
+            var rows = await proxyRepository.ListAsync(enabledOnly: true, ct);
+            entry = rows.FirstOrDefault();
+            if (entry is null)
+                return BadRequest(new { error = "No enabled proxies in DB" });
+        }
 
-        var entry = servers[0];
         var targetHost = string.IsNullOrWhiteSpace(host) ? "www.google.com" : host;
         var targetPort = port is > 0 ? port.Value : 443;
         var timeout = TimeSpan.FromMilliseconds(timeoutMs is > 0 ? timeoutMs.Value : 8_000);
@@ -709,6 +720,8 @@ public class CollectionTasksController : ControllerBase
 
             return Ok(new
             {
+                proxy_id = entry.Id,
+                proxy_notes = entry.Notes,
                 proxy = $"{protocol}://{entry.Host}:{entry.Port}",
                 target = $"{targetHost}:{targetPort}",
                 tcp_connected_ms = tcpConnectedMs,
@@ -723,6 +736,8 @@ public class CollectionTasksController : ControllerBase
             sw.Stop();
             return Ok(new
             {
+                proxy_id = entry.Id,
+                proxy_notes = entry.Notes,
                 proxy = $"{protocol}://{entry.Host}:{entry.Port}",
                 target = $"{targetHost}:{targetPort}",
                 total_ms = sw.ElapsedMilliseconds,
@@ -743,6 +758,7 @@ public class CollectionTasksController : ControllerBase
                 $"Unsupported proxy protocol '{protocol}'. Allowed: http, https.")
         };
     }
+
 
     /// <summary>
     /// QA-endpoint: прямой вызов плагина по businessId.

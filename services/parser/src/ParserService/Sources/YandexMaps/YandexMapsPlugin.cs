@@ -60,6 +60,7 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
 
         IReadOnlyList<RawReview>? reviews = null;
         Exception? lastException = null;
+        var tried = new List<ProxyInfo>();
 
         for (int attempt = 1; attempt <= _options.MaxRetries; attempt++)
         {
@@ -68,9 +69,9 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
                 "[YandexPlugin] Попытка {Attempt}/{MaxRetries} для {BusinessId} (stealth: {Profile})",
                 attempt, _options.MaxRetries, branch.ExternalId, profile);
 
-            var proxy = await _proxyRotator.GetProxyAsync(SourceType.YandexMaps, ct);
-            _logger.LogDebug("[YandexPlugin] Прокси: {Proxy}",
-                proxy != null ? $"{proxy.Host}:{proxy.Port}" : "без прокси");
+            var proxy = await _proxyRotator.GetProxyAsync(SourceType.YandexMaps, ct, tried);
+            _logger.LogInformation("[YandexPlugin] Прокси: {Proxy}",
+                proxy != null ? proxy.DisplayName : "без прокси");
 
             var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
             _logger.LogDebug("[YandexPlugin] Browser context получен");
@@ -111,11 +112,15 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
                 lastException = ex;
                 var failureReason = ClassifyFailure(ex);
                 _logger.LogWarning(ex,
-                    "[YandexPlugin] Попытка {Attempt}/{MaxRetries} провалена для {BusinessId}: {Reason} (stealth: {Profile}). Повтор...",
-                    attempt, _options.MaxRetries, branch.ExternalId, failureReason, profile);
+                    "[YandexPlugin] Попытка {Attempt}/{MaxRetries} провалена для {BusinessId} через прокси {Proxy}: {Reason} (stealth: {Profile}). Повтор...",
+                    attempt, _options.MaxRetries, branch.ExternalId,
+                    proxy != null ? proxy.DisplayName : "без прокси", failureReason, profile);
 
                 if (proxy != null)
+                {
+                    tried.Add(proxy);
                     await _proxyRotator.ReportFailureAsync(proxy, failureReason);
+                }
 
                 var backoff = (int)Math.Pow(2, attempt) * 1000;
                 _logger.LogDebug("[YandexPlugin] Backoff: {Delay}мс перед следующей попыткой", backoff);
@@ -151,10 +156,11 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
 
         IReadOnlyList<SearchBranchResult>? results = null;
         Exception? lastException = null;
+        var tried = new List<ProxyInfo>();
 
         for (int attempt = 1; attempt <= _options.MaxRetries; attempt++)
         {
-            var proxy = await _proxyRotator.GetProxyAsync(SourceType.YandexMaps, ct);
+            var proxy = await _proxyRotator.GetProxyAsync(SourceType.YandexMaps, ct, tried);
             _logger.LogInformation("[YandexPlugin] Поиск: попытка {Attempt}/{Max}, прокси={Proxy}",
                 attempt, _options.MaxRetries,
                 proxy != null ? proxy.DisplayName : "без прокси");
@@ -202,7 +208,10 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
                     attempt, _options.MaxRetries,
                     proxy != null ? proxy.DisplayName : "без прокси", reason);
                 if (proxy != null)
+                {
+                    tried.Add(proxy);
                     await _proxyRotator.ReportFailureAsync(proxy, reason);
+                }
                 var backoff = (int)Math.Pow(2, attempt) * 1000;
                 await Task.Delay(backoff, ct);
             }

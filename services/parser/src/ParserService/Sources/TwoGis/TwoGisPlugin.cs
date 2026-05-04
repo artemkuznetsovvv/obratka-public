@@ -58,19 +58,22 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
 
         IReadOnlyList<RawReview>? reviews = null;
         Exception? lastException = null;
+        var tried = new List<ProxyInfo>();
 
         for (int attempt = 1; attempt <= _options.MaxRetries; attempt++)
         {
-            _logger.LogInformation("[2GIS] Попытка {Attempt}/{Max} для {FirmId}",
-                attempt, _options.MaxRetries, branch.ExternalId);
+            var proxy = await _proxyRotator.GetProxyAsync(SourceType.TwoGis, ct, tried);
+            _logger.LogInformation("[2GIS] Попытка {Attempt}/{Max} для {FirmId}, прокси={Proxy}",
+                attempt, _options.MaxRetries, branch.ExternalId,
+                proxy != null ? proxy.DisplayName : "без прокси");
 
             try
             {
                 reviews = _options.CollectionMode switch
                 {
-                    TwoGisCollectionMode.Api => await CollectViaApiAsync(branch, period, ct),
-                    TwoGisCollectionMode.BrowserScroll => await CollectViaBrowserAsync(branch, period, ct),
-                    _ => await CollectViaApiAsync(branch, period, ct)
+                    TwoGisCollectionMode.Api => await CollectViaApiAsync(branch, period, proxy, ct),
+                    TwoGisCollectionMode.BrowserScroll => await CollectViaBrowserAsync(branch, period, proxy, ct),
+                    _ => await CollectViaApiAsync(branch, period, proxy, ct)
                 };
 
                 _logger.LogInformation("[2GIS] Попытка {Attempt} успешна: {Count} отзывов",
@@ -80,9 +83,17 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
             catch (Exception ex) when (attempt < _options.MaxRetries && IsTransient(ex))
             {
                 lastException = ex;
+                var reason = ClassifyFailure(ex);
                 _logger.LogWarning(ex,
-                    "[2GIS] Попытка {Attempt}/{Max} провалена: {Message}. Повтор...",
-                    attempt, _options.MaxRetries, ex.Message);
+                    "[2GIS] Попытка {Attempt}/{Max} провалена через прокси {Proxy}: {Reason}. Повтор...",
+                    attempt, _options.MaxRetries,
+                    proxy != null ? proxy.DisplayName : "без прокси", reason);
+
+                if (proxy != null)
+                {
+                    tried.Add(proxy);
+                    await _proxyRotator.ReportFailureAsync(proxy, reason);
+                }
 
                 // При ошибке API-ключа — сбрасываем кеш
                 if (ex is HttpRequestException { StatusCode: System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.Unauthorized })
@@ -93,6 +104,10 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
 
                 var backoff = (int)Math.Pow(2, attempt) * 1000;
                 await Task.Delay(backoff, ct);
+            }
+            finally
+            {
+                if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
             }
         }
 
@@ -118,10 +133,11 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
 
         IReadOnlyList<SearchBranchResult>? results = null;
         Exception? lastException = null;
+        var tried = new List<ProxyInfo>();
 
         for (int attempt = 1; attempt <= _options.MaxRetries; attempt++)
         {
-            var proxy = await _proxyRotator.GetProxyAsync(SourceType.TwoGis, ct);
+            var proxy = await _proxyRotator.GetProxyAsync(SourceType.TwoGis, ct, tried);
             _logger.LogInformation("[2GIS] Поиск: попытка {Attempt}/{Max}, прокси={Proxy}",
                 attempt, _options.MaxRetries,
                 proxy != null ? proxy.DisplayName : "без прокси");
@@ -162,7 +178,10 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
                     attempt, _options.MaxRetries,
                     proxy != null ? proxy.DisplayName : "без прокси", reason);
                 if (proxy != null)
+                {
+                    tried.Add(proxy);
                     await _proxyRotator.ReportFailureAsync(proxy, reason);
+                }
                 var backoff = (int)Math.Pow(2, attempt) * 1000;
                 await Task.Delay(backoff, ct);
             }
@@ -184,41 +203,21 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
     // ---- Private: collection strategies ----
 
     private async Task<IReadOnlyList<RawReview>> CollectViaApiAsync(
-        BranchTarget branch, DateRange period, CancellationToken ct)
+        BranchTarget branch, DateRange period, ProxyInfo? proxy, CancellationToken ct)
     {
-        var proxy = await _proxyRotator.GetProxyAsync(SourceType.TwoGis, ct);
-        _logger.LogDebug("[2GIS] API-режим: прокси={Proxy}",
-            proxy != null ? $"{proxy.Host}:{proxy.Port}" : "без прокси");
+        var apiKey = await GetApiKeyAsync(proxy, ct);
 
-        try
-        {
-            var apiKey = await GetApiKeyAsync(proxy, ct);
+        using var httpClient = CreateHttpClient(proxy);
+        var apiClient = new TwoGisApiClient(httpClient, _logger);
+        var collector = new TwoGisApiCollector(apiClient, _options, _logger);
 
-            using var httpClient = CreateHttpClient(proxy);
-            var apiClient = new TwoGisApiClient(httpClient, _logger);
-            var collector = new TwoGisApiCollector(apiClient, _options, _logger);
-
-            return await collector.CollectAllReviewsAsync(
-                branch.ExternalId, apiKey, branch, period, ct);
-        }
-        catch (Exception ex) when (proxy != null)
-        {
-            var reason = ClassifyFailure(ex);
-            _logger.LogWarning("[2GIS] API proxy {Host}:{Port} failure: {Reason}",
-                proxy.Host, proxy.Port, reason);
-            await _proxyRotator.ReportFailureAsync(proxy, reason);
-            throw;
-        }
-        finally
-        {
-            if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
-        }
+        return await collector.CollectAllReviewsAsync(
+            branch.ExternalId, apiKey, branch, period, ct);
     }
 
     private async Task<IReadOnlyList<RawReview>> CollectViaBrowserAsync(
-        BranchTarget branch, DateRange period, CancellationToken ct)
+        BranchTarget branch, DateRange period, ProxyInfo? proxy, CancellationToken ct)
     {
-        var proxy = await _proxyRotator.GetProxyAsync(SourceType.TwoGis, ct);
         var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
         try
         {
@@ -227,18 +226,9 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
             return await collector.CollectAllReviewsAsync(
                 browserContext, branch.ExternalId, branch, period, ct);
         }
-        catch (Exception ex) when (proxy != null)
-        {
-            var reason = ClassifyFailure(ex);
-            _logger.LogWarning("[2GIS] Proxy {Host}:{Port} failure: {Reason}",
-                proxy.Host, proxy.Port, reason);
-            await _proxyRotator.ReportFailureAsync(proxy, reason);
-            throw;
-        }
         finally
         {
             await _browserPool.ReleaseAsync(browserContext);
-            if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
         }
     }
 
@@ -279,6 +269,7 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
         var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
         try
         {
+            await _stealthConfigurator.ApplyStealthAsync(browserContext, ct);
             var page = await browserContext.NewPageAsync();
             try
             {

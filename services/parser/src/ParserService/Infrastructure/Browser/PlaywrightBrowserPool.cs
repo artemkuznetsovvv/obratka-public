@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Playwright;
 using ParserService.Infrastructure.Proxy;
 
@@ -16,13 +17,12 @@ public class BrowserPoolOptions
 public class PlaywrightBrowserPool : IBrowserPool, IAsyncDisposable
 {
     private readonly SemaphoreSlim _semaphore = new(3, 3);
-    private readonly SemaphoreSlim _initLock = new(1, 1);
+    private readonly SemaphoreSlim _playwrightInitLock = new(1, 1);
+    private readonly ConcurrentDictionary<bool, Lazy<Task<BrowserInstance>>> _browsers = new();
     private readonly ILogger<PlaywrightBrowserPool> _logger;
     private readonly BrowserPoolOptions _options;
 
     private IPlaywright? _playwright;
-    private IBrowser? _browser;
-    private string? _realBrowserVersion;
 
     /// <summary>
     /// Common desktop viewports — weighted towards popular resolutions.
@@ -52,10 +52,11 @@ public class PlaywrightBrowserPool : IBrowserPool, IAsyncDisposable
 
         try
         {
-            await EnsureInitializedAsync();
+            var disableHttp2 = options?.DisableHttp2 ?? false;
+            var instance = await GetOrCreateBrowserAsync(disableHttp2, ct);
 
             var viewport = Viewports[Random.Shared.Next(Viewports.Length)];
-            var ua = BuildUserAgent();
+            var ua = BuildUserAgent(instance.Version);
 
             var contextOptions = new BrowserNewContextOptions
             {
@@ -77,11 +78,11 @@ public class PlaywrightBrowserPool : IBrowserPool, IAsyncDisposable
                 };
             }
 
-            var context = await _browser!.NewContextAsync(contextOptions);
+            var context = await instance.Browser.NewContextAsync(contextOptions);
 
             _logger.LogDebug(
-                "[BrowserPool] Context создан: UA={UA}, viewport={W}x{H}, proxy={HasProxy}",
-                ua[^30..], viewport.Width, viewport.Height, options?.Proxy != null);
+                "[BrowserPool] Context создан: UA={UA}, viewport={W}x{H}, proxy={HasProxy}, h2={Http2}",
+                ua[^30..], viewport.Width, viewport.Height, options?.Proxy != null, !disableHttp2);
             return context;
         }
         catch
@@ -89,13 +90,6 @@ public class PlaywrightBrowserPool : IBrowserPool, IAsyncDisposable
             _semaphore.Release();
             throw;
         }
-    }
-
-    private string BuildUserAgent()
-    {
-        // Use real Chrome version from the launched browser to match TLS/JA3 fingerprint
-        var version = _realBrowserVersion ?? "136.0.0.0";
-        return $"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Safari/537.36";
     }
 
     public async Task ReleaseAsync(IBrowserContext context)
@@ -110,42 +104,82 @@ public class PlaywrightBrowserPool : IBrowserPool, IAsyncDisposable
         }
     }
 
-    private async Task EnsureInitializedAsync()
+    private string BuildUserAgent(string browserVersion)
     {
-        if (_browser != null) return;
+        // Use real Chrome version from the launched browser to match TLS/JA3 fingerprint
+        return $"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{browserVersion} Safari/537.36";
+    }
 
-        await _initLock.WaitAsync();
+    private async Task<BrowserInstance> GetOrCreateBrowserAsync(bool disableHttp2, CancellationToken ct)
+    {
+        await EnsurePlaywrightAsync(ct);
+
+        var lazy = _browsers.GetOrAdd(disableHttp2,
+            key => new Lazy<Task<BrowserInstance>>(() => LaunchBrowserAsync(key)));
+        return await lazy.Value;
+    }
+
+    private async Task EnsurePlaywrightAsync(CancellationToken ct)
+    {
+        if (_playwright != null) return;
+
+        await _playwrightInitLock.WaitAsync(ct);
         try
         {
-            if (_browser != null) return;
+            if (_playwright != null) return;
 
+            ct.ThrowIfCancellationRequested();
             _logger.LogInformation("[BrowserPool] Инициализация Playwright...");
             _playwright = await Playwright.CreateAsync();
-            _browser = await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
-            {
-                Channel = "chrome",
-                Headless = _options.Headless,
-                Args = ["--disable-blink-features=AutomationControlled"]
-            });
-
-            // Extract real Chrome version for UA synchronization
-            _realBrowserVersion = _browser.Version;
-
-            _logger.LogInformation(
-                "[BrowserPool] Инициализирован: chrome {Version}, headless={Headless}",
-                _realBrowserVersion, _options.Headless);
         }
         finally
         {
-            _initLock.Release();
+            _playwrightInitLock.Release();
         }
+    }
+
+    private async Task<BrowserInstance> LaunchBrowserAsync(bool disableHttp2)
+    {
+        var args = new List<string> { "--disable-blink-features=AutomationControlled" };
+        if (disableHttp2)
+            args.Add("--disable-http2");
+
+        var browser = await _playwright!.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+        {
+            Channel = "chrome",
+            Headless = _options.Headless,
+            Args = args
+        });
+
+        _logger.LogInformation(
+            "[BrowserPool] Launched chrome {Version}: headless={Headless}, h2={Http2}",
+            browser.Version, _options.Headless, !disableHttp2);
+
+        return new BrowserInstance(browser, browser.Version);
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_browser != null) await _browser.CloseAsync();
+        foreach (var lazy in _browsers.Values)
+        {
+            if (lazy.IsValueCreated)
+            {
+                try
+                {
+                    var instance = await lazy.Value;
+                    await instance.Browser.CloseAsync();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[BrowserPool] Failed to close browser instance");
+                }
+            }
+        }
+        _browsers.Clear();
         _playwright?.Dispose();
         _semaphore.Dispose();
-        _initLock.Dispose();
+        _playwrightInitLock.Dispose();
     }
+
+    private sealed record BrowserInstance(IBrowser Browser, string Version);
 }

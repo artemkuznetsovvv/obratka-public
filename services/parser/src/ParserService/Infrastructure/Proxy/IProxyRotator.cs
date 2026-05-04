@@ -30,7 +30,17 @@ public enum ProxyFailureReason
 
 public interface IProxyRotator
 {
-    Task<ProxyInfo?> GetProxyAsync(SourceType source, CancellationToken ct);
+    /// <summary>
+    /// Возвращает следующий прокси в ротации (round-robin).
+    /// <paramref name="exclude"/> — список прокси, которые нужно исключить (например, упавшие
+    /// в текущем retry-цикле плагина). Сравнение по Host:Port:Username. Если все доступные
+    /// прокси находятся в exclude или на cooldown — возвращает null.
+    /// </summary>
+    Task<ProxyInfo?> GetProxyAsync(
+        SourceType source,
+        CancellationToken ct,
+        IReadOnlyCollection<ProxyInfo>? exclude = null);
+
     Task ReleaseProxyAsync(ProxyInfo proxy);
     Task ReportFailureAsync(ProxyInfo proxy, ProxyFailureReason reason);
 }

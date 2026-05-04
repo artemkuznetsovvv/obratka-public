@@ -28,7 +28,10 @@ public class DbProxyRotator : IProxyRotator
         _logger = logger;
     }
 
-    public async Task<ProxyInfo?> GetProxyAsync(SourceType source, CancellationToken ct)
+    public async Task<ProxyInfo?> GetProxyAsync(
+        SourceType source,
+        CancellationToken ct,
+        IReadOnlyCollection<ProxyInfo>? exclude = null)
     {
         await EnsureSeededAsync(ct);
 
@@ -45,11 +48,17 @@ public class DbProxyRotator : IProxyRotator
         var now = DateTimeOffset.UtcNow;
         var available = entries
             .Where(e => e.CooldownUntil is null || e.CooldownUntil <= now)
+            .Where(e => exclude is null || !exclude.Any(x => SameProxy(x, e)))
             .ToList();
 
         if (available.Count == 0)
         {
-            _logger.LogWarning("All {Count} enabled proxies on cooldown for {Source}", entries.Count, source);
+            if (exclude is { Count: > 0 })
+                _logger.LogWarning(
+                    "No fresh proxies for {Source}: total={Total}, excluded={Excluded}, all others on cooldown",
+                    source, entries.Count, exclude.Count);
+            else
+                _logger.LogWarning("All {Count} enabled proxies on cooldown for {Source}", entries.Count, source);
             return null;
         }
 
@@ -58,10 +67,13 @@ public class DbProxyRotator : IProxyRotator
 
         await repo.TouchLastUsedAsync(picked.Id, ct);
         var info = new ProxyInfo(picked.Host, picked.Port, picked.Username, picked.Password, picked.Protocol, picked.Notes);
-        _logger.LogDebug("Assigned proxy {Proxy} (id={Id}) for {Source}",
-            info.DisplayName, picked.Id, source);
+        _logger.LogDebug("Assigned proxy {Proxy} (id={Id}) for {Source} (pool: {Available}/{Total})",
+            info.DisplayName, picked.Id, source, available.Count, entries.Count);
         return info;
     }
+
+    private static bool SameProxy(ProxyInfo a, ProxyEntity b) =>
+        a.Host == b.Host && a.Port == b.Port && a.Username == b.Username;
 
     public Task ReleaseProxyAsync(ProxyInfo proxy)
     {
