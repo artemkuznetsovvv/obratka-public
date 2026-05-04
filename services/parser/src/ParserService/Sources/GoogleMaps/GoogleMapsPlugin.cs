@@ -148,9 +148,14 @@ public class GoogleMapsPlugin : IReviewSourcePlugin
                         Timeout = _options.NavigationTimeoutMs
                     });
                     await GoogleMapsConsentHelper.DismissConsentIfNeededAsync(page, _logger, ct);
-                    await Task.Delay(Random.Shared.Next(2000, 4000), ct);
+
+                    // Wait for either single-result redirect (URL → /maps/place/) or feed with cards.
+                    // Fixes race where extraction runs before SPA settles into one of these states.
+                    await WaitForSearchPageReadyAsync(page, ct);
 
                     results = await ExtractSearchResultsAsync(page);
+                    _logger.LogDebug("[GMaps] Поиск: финальный URL={Url}, найдено={Count}",
+                        page.Url, results.Count);
                     break;
                 }
                 finally
@@ -272,82 +277,54 @@ public class GoogleMapsPlugin : IReviewSourcePlugin
 
     // ---- Private: search ----
 
+    private async Task WaitForSearchPageReadyAsync(IPage page, CancellationToken ct)
+    {
+        try
+        {
+            await page.WaitForFunctionAsync("""
+                () => {
+                    // Single-result redirect → place page with FID in URL
+                    const url = window.location.href;
+                    if (url.includes('/maps/place/') && /!1s0x[0-9a-f]+:0x[0-9a-f]+/i.test(url)) {
+                        return true;
+                    }
+                    // Multi-result list → feed with at least one card
+                    const feed = document.querySelector('[role="feed"]');
+                    if (feed && feed.querySelector('.Nv2PK')) return true;
+                    return false;
+                }
+            """, null, new PageWaitForFunctionOptions { Timeout = 15_000 });
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning("[GMaps] Поиск: страница не пришла в готовое состояние за 15с, URL={Url}",
+                page.Url);
+        }
+        catch (PlaywrightException ex) when (ex.Message.Contains("Timeout", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning("[GMaps] Поиск: страница не пришла в готовое состояние за 15с, URL={Url}",
+                page.Url);
+        }
+
+        await Task.Delay(Random.Shared.Next(800, 1500), ct);
+    }
+
     private async Task<IReadOnlyList<SearchBranchResult>> ExtractSearchResultsAsync(IPage page)
     {
         var json = await page.EvaluateAsync<string>("""
             () => {
                 const results = [];
-                const feed = document.querySelector('[role="feed"]');
-
-                // Case 1: search returned a list of results
-                if (feed) {
-                    const cards = feed.querySelectorAll('.Nv2PK');
-                    for (const card of cards) {
-                        const link = card.querySelector('a.hfpxzc');
-                        if (!link) continue;
-
-                        const href = link.getAttribute('href') || '';
-                        const ariaLabel = link.getAttribute('aria-label') || '';
-
-                        // FID from URL: !1s0x...:0x...
-                        const fidMatch = href.match(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/i);
-                        const fid = fidMatch ? fidMatch[1] : null;
-                        if (!fid) continue;
-
-                        // Name
-                        const nameEl = card.querySelector('.qBF1Pd');
-                        const name = nameEl?.textContent?.trim() || ariaLabel || '';
-
-                        // Rating + review count from role="img" aria-label
-                        // Format: "4,6-звездочные Отзывов: 2 199" or "4.6 stars 2,199 Reviews"
-                        const ratingEl = card.querySelector('[role="img"][aria-label]');
-                        let rating = null;
-                        let reviewCount = null;
-                        if (ratingEl) {
-                            const label = ratingEl.getAttribute('aria-label') || '';
-                            const rMatch = label.match(/([\d]+[,.][\d]+)/);
-                            if (rMatch) rating = parseFloat(rMatch[1].replace(',', '.'));
-                            // Review count: digit groups (with spaces) — "Отзывов: 2 199" or "2,199 Reviews"
-                            const cMatch = label.match(/(\d[\d\s,.]*\d)/g);
-                            if (cMatch) {
-                                // Last digit group is the review count
-                                reviewCount = parseInt(cMatch[cMatch.length - 1].replace(/[\s,.]/g, ''));
-                            }
-                        }
-
-                        // Address: find leaf .W4Efsd (no child .W4Efsd) with ·, skip hours
-                        let address = '';
-                        const w4els = card.querySelectorAll('.W4Efsd');
-                        for (const el of w4els) {
-                            // Skip parent containers that have nested .W4Efsd
-                            if (el.querySelector('.W4Efsd')) continue;
-                            const t = el.textContent || '';
-                            if (!t.includes('·')) continue;
-                            // Skip hours rows
-                            if (/Откроется|Открыто|Закрыто|Opens|Closes|Open/i.test(t)) continue;
-                            // Split by · and take last part as address
-                            const parts = t.split('·').map(p => p.trim()).filter(p => p.length > 0);
-                            if (parts.length >= 2) {
-                                address = parts[parts.length - 1];
-                                break;
-                            }
-                        }
-
-                        results.push({ fid, name, address, href, rating, reviewCount });
-                        if (results.length >= 20) break;
-                    }
-                    return JSON.stringify(results);
-                }
-
-                // Case 2: search redirected directly to a place page
                 const url = window.location.href;
-                const fidMatch = url.match(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/i);
-                if (fidMatch) {
-                    const fid = fidMatch[1];
+
+                // Case 1: single-result redirect to /maps/place/.../!1s<fid>
+                // Check URL FID first — most reliable signal that we're on a place page,
+                // independent of any transient [role="feed"] state.
+                const placeFidMatch = url.match(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/i);
+                if (placeFidMatch && url.includes('/maps/place/')) {
+                    const fid = placeFidMatch[1];
                     const nameEl = document.querySelector('h1');
                     const name = nameEl?.textContent?.trim() || '';
 
-                    // Rating from place page
                     const ratingEl = document.querySelector('[role="img"][aria-label*="звездочн"], [role="img"][aria-label*="star"]');
                     let rating = null;
                     let reviewCount = null;
@@ -356,7 +333,6 @@ public class GoogleMapsPlugin : IReviewSourcePlugin
                         const rMatch = label.match(/([\d]+[,.][\d]+)/);
                         if (rMatch) rating = parseFloat(rMatch[1].replace(',', '.'));
                     }
-                    // Review count: "Ещё отзывы (2 616)" or "More reviews (2,616)"
                     const allBtns = document.querySelectorAll('button');
                     for (const btn of allBtns) {
                         const label = btn.getAttribute('aria-label') || btn.textContent || '';
@@ -368,12 +344,63 @@ public class GoogleMapsPlugin : IReviewSourcePlugin
                         }
                     }
 
-                    // Address
                     const addrEl = document.querySelector('[data-item-id="address"] .fontBodyMedium')
                         || document.querySelector('button[data-item-id="address"]');
                     const address = addrEl?.textContent?.trim() || '';
 
                     results.push({ fid, name, address, href: url, rating, reviewCount });
+                    return JSON.stringify(results);
+                }
+
+                // Case 2: search returned a list of results
+                const feed = document.querySelector('[role="feed"]');
+                if (feed) {
+                    const cards = feed.querySelectorAll('.Nv2PK');
+                    for (const card of cards) {
+                        const link = card.querySelector('a.hfpxzc');
+                        if (!link) continue;
+
+                        const href = link.getAttribute('href') || '';
+                        const ariaLabel = link.getAttribute('aria-label') || '';
+
+                        const fidMatch = href.match(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/i);
+                        const fid = fidMatch ? fidMatch[1] : null;
+                        if (!fid) continue;
+
+                        const nameEl = card.querySelector('.qBF1Pd');
+                        const name = nameEl?.textContent?.trim() || ariaLabel || '';
+
+                        // Format: "4,6-звездочные Отзывов: 2 199" or "4.6 stars 2,199 Reviews"
+                        const ratingEl = card.querySelector('[role="img"][aria-label]');
+                        let rating = null;
+                        let reviewCount = null;
+                        if (ratingEl) {
+                            const label = ratingEl.getAttribute('aria-label') || '';
+                            const rMatch = label.match(/([\d]+[,.][\d]+)/);
+                            if (rMatch) rating = parseFloat(rMatch[1].replace(',', '.'));
+                            const cMatch = label.match(/(\d[\d\s,.]*\d)/g);
+                            if (cMatch) {
+                                reviewCount = parseInt(cMatch[cMatch.length - 1].replace(/[\s,.]/g, ''));
+                            }
+                        }
+
+                        let address = '';
+                        const w4els = card.querySelectorAll('.W4Efsd');
+                        for (const el of w4els) {
+                            if (el.querySelector('.W4Efsd')) continue;
+                            const t = el.textContent || '';
+                            if (!t.includes('·')) continue;
+                            if (/Откроется|Открыто|Закрыто|Opens|Closes|Open/i.test(t)) continue;
+                            const parts = t.split('·').map(p => p.trim()).filter(p => p.length > 0);
+                            if (parts.length >= 2) {
+                                address = parts[parts.length - 1];
+                                break;
+                            }
+                        }
+
+                        results.push({ fid, name, address, href, rating, reviewCount });
+                        if (results.length >= 20) break;
+                    }
                 }
 
                 return JSON.stringify(results);
