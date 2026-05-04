@@ -100,51 +100,74 @@ public class GoogleMapsPlugin : IReviewSourcePlugin
 
         await _rateLimiter.WaitAsync(SourceType.GoogleMaps, ct);
 
-        var proxy = await _proxyRotator.GetProxyAsync(SourceType.GoogleMaps, ct);
-        var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
-        try
+        IReadOnlyList<SearchBranchResult>? results = null;
+        Exception? lastException = null;
+
+        for (int attempt = 1; attempt <= _options.MaxRetries; attempt++)
         {
-            await _stealthConfigurator.ApplyStealthAsync(browserContext, ct);
-            var page = await browserContext.NewPageAsync();
+            var proxy = await _proxyRotator.GetProxyAsync(SourceType.GoogleMaps, ct);
+            _logger.LogInformation("[GMaps] Поиск: попытка {Attempt}/{Max}, прокси={Proxy}",
+                attempt, _options.MaxRetries,
+                proxy != null ? proxy.DisplayName : "без прокси");
+
+            var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
             try
             {
-                var searchQuery = string.IsNullOrEmpty(request.City)
-                    ? request.Query
-                    : $"{request.Query} {request.City}";
-
-                // Google Maps search works with raw UTF-8 + spaces as '+'
-                // Uri.EscapeDataString percent-encodes Cyrillic which breaks search
-                var searchUrl = "https://www.google.com/maps/search/" + searchQuery.Replace(' ', '+');
-                _logger.LogDebug("[GMaps] Открываю поиск: {Url}", searchUrl);
-
-                await page.GotoAsync(searchUrl, new PageGotoOptions
+                await _stealthConfigurator.ApplyStealthAsync(browserContext, ct);
+                var page = await browserContext.NewPageAsync();
+                try
                 {
-                    WaitUntil = WaitUntilState.DOMContentLoaded,
-                    Timeout = _options.NavigationTimeoutMs
-                });
-                await GoogleMapsConsentHelper.DismissConsentIfNeededAsync(page, _logger, ct);
-                await Task.Delay(Random.Shared.Next(2000, 4000), ct);
+                    var searchQuery = string.IsNullOrEmpty(request.City)
+                        ? request.Query
+                        : $"{request.Query} {request.City}";
 
-                var results = await ExtractSearchResultsAsync(page);
-                _logger.LogInformation("[GMaps] === Поиск завершён === найдено {Count} для '{Query}'",
-                    results.Count, request.Query);
-                return results;
+                    // Google Maps search works with raw UTF-8 + spaces as '+'
+                    // Uri.EscapeDataString percent-encodes Cyrillic which breaks search
+                    var searchUrl = "https://www.google.com/maps/search/" + searchQuery.Replace(' ', '+');
+                    _logger.LogDebug("[GMaps] Открываю поиск: {Url}", searchUrl);
+
+                    await page.GotoAsync(searchUrl, new PageGotoOptions
+                    {
+                        WaitUntil = WaitUntilState.DOMContentLoaded,
+                        Timeout = _options.NavigationTimeoutMs
+                    });
+                    await GoogleMapsConsentHelper.DismissConsentIfNeededAsync(page, _logger, ct);
+                    await Task.Delay(Random.Shared.Next(2000, 4000), ct);
+
+                    results = await ExtractSearchResultsAsync(page);
+                    break;
+                }
+                finally
+                {
+                    await page.CloseAsync();
+                }
+            }
+            catch (Exception ex) when (attempt < _options.MaxRetries && IsTransient(ex))
+            {
+                lastException = ex;
+                var reason = ClassifyFailure(ex);
+                _logger.LogWarning(ex,
+                    "[GMaps] Поиск: попытка {Attempt}/{Max} провалена через прокси {Proxy}: {Reason}. Повтор...",
+                    attempt, _options.MaxRetries,
+                    proxy != null ? proxy.DisplayName : "без прокси", reason);
+                if (proxy != null)
+                    await _proxyRotator.ReportFailureAsync(proxy, reason);
+                var backoff = (int)Math.Pow(2, attempt) * 1000;
+                await Task.Delay(backoff, ct);
             }
             finally
             {
-                await page.CloseAsync();
+                await _browserPool.ReleaseAsync(browserContext);
+                if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
             }
         }
-        catch (Exception ex) when (proxy != null)
-        {
-            await _proxyRotator.ReportFailureAsync(proxy, ClassifyFailure(ex));
-            throw;
-        }
-        finally
-        {
-            await _browserPool.ReleaseAsync(browserContext);
-            if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
-        }
+
+        if (results == null)
+            throw lastException ?? new InvalidOperationException("Failed to search GoogleMaps branches");
+
+        _logger.LogInformation("[GMaps] === Поиск завершён === найдено {Count} для '{Query}'",
+            results.Count, request.Query);
+        return results;
     }
 
     // ---- Private: collection strategies ----

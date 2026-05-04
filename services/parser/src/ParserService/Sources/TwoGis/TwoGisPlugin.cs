@@ -116,48 +116,69 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
 
         await _rateLimiter.WaitAsync(SourceType.TwoGis, ct);
 
-        // Catalog API поиска: catalog.api.2gis.ru/3.0/items
-        // Пока используем browser-based поиск
-        var proxy = await _proxyRotator.GetProxyAsync(SourceType.TwoGis, ct);
-        var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
-        try
+        IReadOnlyList<SearchBranchResult>? results = null;
+        Exception? lastException = null;
+
+        for (int attempt = 1; attempt <= _options.MaxRetries; attempt++)
         {
-            await _stealthConfigurator.ApplyStealthAsync(browserContext, ct);
-            var page = await browserContext.NewPageAsync();
+            var proxy = await _proxyRotator.GetProxyAsync(SourceType.TwoGis, ct);
+            _logger.LogInformation("[2GIS] Поиск: попытка {Attempt}/{Max}, прокси={Proxy}",
+                attempt, _options.MaxRetries,
+                proxy != null ? proxy.DisplayName : "без прокси");
+
+            var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
             try
             {
-                var citySlug = MapCityToSlug(request.City);
-                var encodedQuery = Uri.EscapeDataString(request.Query);
-                var searchUrl = $"https://2gis.ru/{citySlug}/search/{encodedQuery}";
-                _logger.LogDebug("[2GIS] Открываю поиск: {Url}", searchUrl);
-
-                await page.GotoAsync(searchUrl, new PageGotoOptions
+                await _stealthConfigurator.ApplyStealthAsync(browserContext, ct);
+                var page = await browserContext.NewPageAsync();
+                try
                 {
-                    WaitUntil = WaitUntilState.DOMContentLoaded,
-                    Timeout = _options.NavigationTimeoutMs
-                });
-                await Task.Delay(Random.Shared.Next(2000, 4000), ct);
+                    var citySlug = MapCityToSlug(request.City);
+                    var encodedQuery = Uri.EscapeDataString(request.Query);
+                    var searchUrl = $"https://2gis.ru/{citySlug}/search/{encodedQuery}";
+                    _logger.LogDebug("[2GIS] Открываю поиск: {Url}", searchUrl);
 
-                var results = await ExtractSearchResultsAsync(page, ct);
-                _logger.LogInformation("[2GIS] === Поиск завершён === найдено {Count} для '{Query}'",
-                    results.Count, request.Query);
-                return results;
+                    await page.GotoAsync(searchUrl, new PageGotoOptions
+                    {
+                        WaitUntil = WaitUntilState.DOMContentLoaded,
+                        Timeout = _options.NavigationTimeoutMs
+                    });
+                    await Task.Delay(Random.Shared.Next(2000, 4000), ct);
+
+                    results = await ExtractSearchResultsAsync(page, ct);
+                    break;
+                }
+                finally
+                {
+                    await page.CloseAsync();
+                }
+            }
+            catch (Exception ex) when (attempt < _options.MaxRetries && IsTransient(ex))
+            {
+                lastException = ex;
+                var reason = ClassifyFailure(ex);
+                _logger.LogWarning(ex,
+                    "[2GIS] Поиск: попытка {Attempt}/{Max} провалена через прокси {Proxy}: {Reason}. Повтор...",
+                    attempt, _options.MaxRetries,
+                    proxy != null ? proxy.DisplayName : "без прокси", reason);
+                if (proxy != null)
+                    await _proxyRotator.ReportFailureAsync(proxy, reason);
+                var backoff = (int)Math.Pow(2, attempt) * 1000;
+                await Task.Delay(backoff, ct);
             }
             finally
             {
-                await page.CloseAsync();
+                await _browserPool.ReleaseAsync(browserContext);
+                if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
             }
         }
-        catch (Exception ex) when (proxy != null)
-        {
-            await _proxyRotator.ReportFailureAsync(proxy, ClassifyFailure(ex));
-            throw;
-        }
-        finally
-        {
-            await _browserPool.ReleaseAsync(browserContext);
-            if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
-        }
+
+        if (results == null)
+            throw lastException ?? new InvalidOperationException("Failed to search 2GIS branches");
+
+        _logger.LogInformation("[2GIS] === Поиск завершён === найдено {Count} для '{Query}'",
+            results.Count, request.Query);
+        return results;
     }
 
     // ---- Private: collection strategies ----

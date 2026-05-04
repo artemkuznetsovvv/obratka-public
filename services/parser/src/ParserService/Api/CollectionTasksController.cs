@@ -359,12 +359,13 @@ public class CollectionTasksController : ControllerBase
     }
 
     /// <summary>
-    /// QA-endpoint: проверка здоровья всех настроенных прокси. Только в Development.
-    /// GET /api/collection-tasks/qa/proxy-health?timeoutMs=15000
-    /// Для каждого прокси из Proxy:Servers делает запросы:
-    ///   - api.ipify.org — проверка живости + exit-IP
+    /// QA-endpoint: проверка здоровья прокси. Только в Development.
+    /// GET /api/collection-tasks/qa/proxy-health?timeoutMs=15000&amp;enabledOnly=true&amp;id=3
+    /// Источник прокси — таблица Proxies в SQLite. Для каждого прокси делает запросы:
+    ///   - api.ipify.org — живость + exit-IP
     ///   - google.com/maps, yandex.ru, 2gis.ru — геоблок/блок конкретным сайтом
-    /// Возвращает статус, финальный URL после редиректов, латентность и ошибку по каждой цели.
+    /// Возвращает статус, финальный URL после редиректов, латентность и ошибку по каждой цели,
+    /// а также текущее состояние прокси из БД (id, enabled, failure_count, cooldown_until).
     /// </summary>
     [HttpGet("qa/proxy-health")]
     [RequireQaApiKey]
@@ -372,7 +373,9 @@ public class CollectionTasksController : ControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> QaProxyHealth(
         [FromQuery] int? timeoutMs,
-        [FromServices] IOptions<ProxyOptions> proxyOptions,
+        [FromQuery] bool? enabledOnly,
+        [FromQuery] int? id,
+        [FromServices] IProxyRepository proxyRepository,
         CancellationToken ct)
     {
         if (!_env.IsDevelopment())
@@ -380,9 +383,20 @@ public class CollectionTasksController : ControllerBase
                 new { error = "QA endpoint is only available in Development" });
 
         var timeout = TimeSpan.FromMilliseconds(timeoutMs is > 0 ? timeoutMs.Value : 15_000);
-        var servers = proxyOptions.Value.Servers;
 
-        if (servers.Count == 0)
+        IReadOnlyList<Core.Models.ProxyEntity> proxies;
+        if (id.HasValue)
+        {
+            var single = await proxyRepository.GetByIdAsync(id.Value, ct);
+            if (single is null) return NotFound(new { error = $"Proxy id={id} not found" });
+            proxies = [single];
+        }
+        else
+        {
+            proxies = await proxyRepository.ListAsync(enabledOnly, ct);
+        }
+
+        if (proxies.Count == 0)
             return Ok(new { configured = 0, results = Array.Empty<object>() });
 
         var targets = new (string name, string url)[]
@@ -394,7 +408,7 @@ public class CollectionTasksController : ControllerBase
         };
 
         var results = new List<object>();
-        foreach (var entry in servers)
+        foreach (var entry in proxies)
         {
             string protocol;
             try
@@ -405,8 +419,10 @@ public class CollectionTasksController : ControllerBase
             {
                 results.Add(new
                 {
+                    id = entry.Id,
                     address = $"{entry.Host}:{entry.Port}",
                     protocol = entry.Protocol,
+                    enabled = entry.Enabled,
                     ok = false,
                     error = ex.Message
                 });
@@ -428,7 +444,6 @@ public class CollectionTasksController : ControllerBase
                 AutomaticDecompression = DecompressionMethods.All
             };
             using var client = new HttpClient(handler) { Timeout = timeout };
-            // Realistic UA — иначе Google почти гарантированно отдаст 403 / sorry-страницу
             client.DefaultRequestHeaders.UserAgent.ParseAdd(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                 + "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
@@ -471,8 +486,14 @@ public class CollectionTasksController : ControllerBase
             var proxyOk = targetResults.Any(r => (bool)r.GetType().GetProperty("ok")!.GetValue(r)!);
             results.Add(new
             {
+                id = entry.Id,
                 address = $"{entry.Host}:{entry.Port}",
                 protocol,
+                enabled = entry.Enabled,
+                failure_count = entry.FailureCount,
+                cooldown_until = entry.CooldownUntil,
+                last_used_at = entry.LastUsedAt,
+                notes = entry.Notes,
                 ok = proxyOk,
                 targets = targetResults
             });
@@ -480,7 +501,7 @@ public class CollectionTasksController : ControllerBase
 
         return Ok(new
         {
-            configured = servers.Count,
+            configured = proxies.Count,
             healthy = results.Count(r => (bool)r.GetType().GetProperty("ok")!.GetValue(r)!),
             results
         });
@@ -717,10 +738,9 @@ public class CollectionTasksController : ControllerBase
         var p = (protocol ?? "http").Trim().ToLowerInvariant();
         return p switch
         {
-            "http" or "https" or "socks5" => p,
-            "socks" => "socks5",
+            "http" or "https" => p,
             _ => throw new InvalidOperationException(
-                $"Unsupported proxy protocol '{protocol}'. Allowed: http, https, socks5.")
+                $"Unsupported proxy protocol '{protocol}'. Allowed: http, https.")
         };
     }
 

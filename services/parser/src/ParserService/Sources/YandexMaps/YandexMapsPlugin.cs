@@ -149,53 +149,76 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
 
         await _rateLimiter.WaitAsync(SourceType.YandexMaps, ct);
 
-        var proxy = await _proxyRotator.GetProxyAsync(SourceType.YandexMaps, ct);
-        _logger.LogDebug("[YandexPlugin] Поиск: прокси={Proxy}",
-            proxy != null ? $"{proxy.Host}:{proxy.Port}" : "без прокси");
+        IReadOnlyList<SearchBranchResult>? results = null;
+        Exception? lastException = null;
 
-        var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
-
-        try
+        for (int attempt = 1; attempt <= _options.MaxRetries; attempt++)
         {
-            await _stealthConfigurator.ApplyStealthAsync(browserContext, ct);
+            var proxy = await _proxyRotator.GetProxyAsync(SourceType.YandexMaps, ct);
+            _logger.LogInformation("[YandexPlugin] Поиск: попытка {Attempt}/{Max}, прокси={Proxy}",
+                attempt, _options.MaxRetries,
+                proxy != null ? proxy.DisplayName : "без прокси");
 
-            var page = await browserContext.NewPageAsync();
+            var browserContext = await _browserPool.AcquireAsync(new BrowserAcquireOptions(proxy), ct);
 
             try
             {
-                var searchQuery = string.IsNullOrEmpty(request.City)
-                    ? request.Query
-                    : $"{request.Query} {request.City}";
+                await _stealthConfigurator.ApplyStealthAsync(browserContext, ct);
 
-                var searchUrl = $"https://yandex.ru/maps/?text={Uri.EscapeDataString(searchQuery)}";
-                _logger.LogDebug("[YandexPlugin] Открываю поиск: {Url}", searchUrl);
-
-                await page.GotoAsync(searchUrl, new PageGotoOptions
+                var page = await browserContext.NewPageAsync();
+                try
                 {
-                    WaitUntil = WaitUntilState.DOMContentLoaded,
-                    Timeout = 30_000
-                });
+                    var searchQuery = string.IsNullOrEmpty(request.City)
+                        ? request.Query
+                        : $"{request.Query} {request.City}";
 
-                _logger.LogDebug("[YandexPlugin] Страница поиска загружена, URL: {Url}", page.Url);
-                await Task.Delay(Random.Shared.Next(2000, 4000), ct);
+                    var searchUrl = $"https://yandex.ru/maps/?text={Uri.EscapeDataString(searchQuery)}";
+                    _logger.LogDebug("[YandexPlugin] Открываю поиск: {Url}", searchUrl);
 
-                _logger.LogDebug("[YandexPlugin] Извлекаю карточки организаций из DOM...");
-                var results = await ExtractSearchResultsAsync(page, ct);
+                    await page.GotoAsync(searchUrl, new PageGotoOptions
+                    {
+                        WaitUntil = WaitUntilState.DOMContentLoaded,
+                        Timeout = 30_000
+                    });
 
-                _logger.LogInformation("[YandexPlugin] === Поиск завершён === найдено {Count} организаций для '{Query}'",
-                    results.Count, request.Query);
-                return results;
+                    _logger.LogDebug("[YandexPlugin] Страница поиска загружена, URL: {Url}", page.Url);
+                    await Task.Delay(Random.Shared.Next(2000, 4000), ct);
+
+                    _logger.LogDebug("[YandexPlugin] Извлекаю карточки организаций из DOM...");
+                    results = await ExtractSearchResultsAsync(page, ct);
+                    break;
+                }
+                finally
+                {
+                    await page.CloseAsync();
+                }
+            }
+            catch (Exception ex) when (attempt < _options.MaxRetries && IsTransient(ex))
+            {
+                lastException = ex;
+                var reason = ClassifyFailure(ex);
+                _logger.LogWarning(ex,
+                    "[YandexPlugin] Поиск: попытка {Attempt}/{Max} провалена через прокси {Proxy}: {Reason}. Повтор...",
+                    attempt, _options.MaxRetries,
+                    proxy != null ? proxy.DisplayName : "без прокси", reason);
+                if (proxy != null)
+                    await _proxyRotator.ReportFailureAsync(proxy, reason);
+                var backoff = (int)Math.Pow(2, attempt) * 1000;
+                await Task.Delay(backoff, ct);
             }
             finally
             {
-                await page.CloseAsync();
+                await _browserPool.ReleaseAsync(browserContext);
+                if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
             }
         }
-        finally
-        {
-            await _browserPool.ReleaseAsync(browserContext);
-            if (proxy != null) await _proxyRotator.ReleaseProxyAsync(proxy);
-        }
+
+        if (results == null)
+            throw lastException ?? new InvalidOperationException("Failed to search Yandex branches");
+
+        _logger.LogInformation("[YandexPlugin] === Поиск завершён === найдено {Count} организаций для '{Query}'",
+            results.Count, request.Query);
+        return results;
     }
 
     private async Task<IReadOnlyList<SearchBranchResult>> ExtractSearchResultsAsync(

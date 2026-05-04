@@ -15,7 +15,7 @@ namespace ParserService.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "9.0.14");
+            modelBuilder.HasAnnotation("ProductVersion", "9.0.15");
 
             modelBuilder.Entity("ParserService.Core.Models.CollectionTask", b =>
                 {
@@ -72,6 +72,60 @@ namespace ParserService.Migrations
                     b.HasIndex("Status");
 
                     b.ToTable("CollectionTasks");
+                });
+
+            modelBuilder.Entity("ParserService.Core.Models.ProxyEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("CooldownUntil")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("FailureCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Host")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("LastUsedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Password")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Port")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Protocol")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Username")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Enabled");
+
+                    b.HasIndex("Host", "Port", "Username")
+                        .IsUnique();
+
+                    b.ToTable("Proxies");
                 });
 #pragma warning restore 612, 618
         }
