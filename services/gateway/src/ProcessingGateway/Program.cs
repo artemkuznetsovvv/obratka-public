@@ -42,6 +42,9 @@ builder.Services.AddDbContext<ProcessingDbContext>(options =>
 // Dapper-фабрика для bulk-INSERT путей (Этапы 3, 6).
 builder.Services.AddSingleton<IDbConnectionFactory, NpgsqlConnectionFactory>();
 
+// Bulk-INSERT отзывов из raw/{source}.json. Stateless через factory — singleton.
+builder.Services.AddSingleton<RawReviewBulkInserter>();
+
 // Healthchecks: liveness без проб; readiness теперь имеет реальную пробу — Postgres.
 builder.Services.AddHealthChecks()
     .AddNpgSql(
