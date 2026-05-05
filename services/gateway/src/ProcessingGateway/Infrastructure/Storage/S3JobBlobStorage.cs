@@ -64,6 +64,27 @@ public sealed class S3JobBlobStorage : IJobBlobStorage
     public Task<LlmOutput> ReadOutputAsync(Guid jobId, CancellationToken ct = default)
         => ReadJsonAsync<LlmOutput>(_bucketName, $"{jobId}/output.json", LlmJson, ct);
 
+    public Task<LlmInput> ReadInputAsync(Guid jobId, CancellationToken ct = default)
+        => ReadJsonAsync<LlmInput>(_bucketName, $"{jobId}/input.json", LlmJson, ct);
+
+    public async Task WriteOutputAsync(Guid jobId, LlmOutput output, CancellationToken ct = default)
+    {
+        var key = $"{jobId}/output.json";
+        var json = JsonSerializer.Serialize(output, LlmJson);
+
+        await _s3.PutObjectAsync(new PutObjectRequest
+        {
+            BucketName = _bucketName,
+            Key = key,
+            ContentBody = json,
+            ContentType = "application/json"
+        }, ct);
+
+        _logger.LogInformation(
+            "Uploaded LLM output for job {AnalysisJobId} to s3://{Bucket}/{Key} ({ProcessedCount} processed)",
+            jobId, _bucketName, key, output.ProcessedReview.Count);
+    }
+
     private async Task<T> ReadJsonAsync<T>(string bucket, string key, JsonSerializerOptions options, CancellationToken ct)
     {
         using var response = await _s3.GetObjectAsync(bucket, key, ct);

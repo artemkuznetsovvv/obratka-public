@@ -26,6 +26,8 @@ services:
       RabbitMq__Pass: "gateway_pwd"
       Llm__RequestQueue: "llm.requests"
       Llm__ResultQueue: "llm.results"
+      Pipeline__AutoFinalizeWithoutAggregates: "true"
+      Pipeline__AutoFinalizeAfterMinutes: "1"
       Seq__ServerUrl: "http://seq:80"
       Gateway__ApiKey: "dev-gateway-api-key"
     depends_on:
@@ -33,6 +35,27 @@ services:
         condition: service_started
       processing-db:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  llm-stub:
+    build:
+      context: .
+      dockerfile: tools/LlmStub/Dockerfile
+    image: processing-gateway-llm-stub:dev
+    environment:
+      DOTNET_ENVIRONMENT: Development
+      RabbitMq__Host: "rabbitmq"
+      RabbitMq__User: "gateway"
+      RabbitMq__Pass: "gateway_pwd"
+      S3__Endpoint: "http://minio:9000"
+      S3__AccessKey: "minioadmin"
+      S3__SecretKey: "minioadmin"
+      S3__BucketName: "obratka-jobs"
+      Seq__ServerUrl: "http://seq:80"
+    depends_on:
       rabbitmq:
         condition: service_healthy
       minio:

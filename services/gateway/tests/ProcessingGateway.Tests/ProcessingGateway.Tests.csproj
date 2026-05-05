@@ -32,6 +32,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\ProcessingGateway\ProcessingGateway.csproj" />
+    <ProjectReference Include="..\..\tools\LlmStub\ProcessingGateway.LlmStub.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -19,8 +19,14 @@ public interface IJobBlobStorage
     /// Сериализует и заливает `input.json` для LLM.
     Task WriteInputAsync(Guid jobId, LlmInput input, CancellationToken ct = default);
 
+    /// Симметричное чтение `input.json` (нужно LLM-стубу и тестам).
+    Task<LlmInput> ReadInputAsync(Guid jobId, CancellationToken ct = default);
+
     /// Скачивает и десериализует `output.json` от LLM.
     Task<LlmOutput> ReadOutputAsync(Guid jobId, CancellationToken ct = default);
+
+    /// Симметричная запись `output.json` (нужно LLM-стубу).
+    Task WriteOutputAsync(Guid jobId, LlmOutput output, CancellationToken ct = default);
 }
 
 /// Парсинг `s3://bucket/key` в (bucket, key). Используется тестами и
