@@ -1,5 +1,8 @@
+using Amazon.S3;
 using Microsoft.EntityFrameworkCore;
 using ProcessingGateway.Infrastructure.Database;
+using ProcessingGateway.Infrastructure.Parser;
+using ProcessingGateway.Infrastructure.Storage;
 using ProcessingGateway.Infrastructure.Telemetry;
 using Serilog;
 using Serilog.Events;
@@ -45,7 +48,48 @@ builder.Services.AddSingleton<IDbConnectionFactory, NpgsqlConnectionFactory>();
 // Bulk-INSERT отзывов из raw/{source}.json. Stateless через factory — singleton.
 builder.Services.AddSingleton<RawReviewBulkInserter>();
 
-// Healthchecks: liveness без проб; readiness теперь имеет реальную пробу — Postgres.
+// HTTP-доступ для CorrelationId-проброса (DelegatingHandler читает HttpContext).
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddTransient<CorrelationIdHandler>();
+
+// Parser HTTP-клиент. ADR-001 §4: per-source POST /api/collection-tasks + GET polling.
+// AddStandardResilienceHandler даёт retry с экспоненциальным backoff, circuit breaker и timeout —
+// дефолтные пресеты Microsoft.Extensions.Http.Resilience.
+var parserBaseUrl = builder.Configuration["Parser:BaseUrl"]
+    ?? throw new InvalidOperationException("Parser:BaseUrl is not configured");
+builder.Services
+    .AddHttpClient<IParserClient, ParserHttpClient>(client =>
+    {
+        client.BaseAddress = new Uri(parserBaseUrl.TrimEnd('/') + "/");
+    })
+    .AddHttpMessageHandler<CorrelationIdHandler>()
+    .AddStandardResilienceHandler();
+
+// AmazonS3 → MinIO. ForcePathStyle=true ОБЯЗАТЕЛЕН (см. Parser-Service/deploy-vps.md §15.4).
+// На VPS PG живёт в `parser-service_internal` и ходит во внутренний http://minio:9000
+// с root-credentials Parser-а. Внешний vhost `s3.193.233.217.223.sslip.io` — для LLM,
+// не для PG.
+builder.Services.AddSingleton<IAmazonS3>(sp =>
+{
+    var cfg = sp.GetRequiredService<IConfiguration>();
+    var endpoint = cfg["S3:Endpoint"]
+        ?? throw new InvalidOperationException("S3:Endpoint is not configured");
+    var accessKey = cfg["S3:AccessKey"]
+        ?? throw new InvalidOperationException("S3:AccessKey is not configured");
+    var secretKey = cfg["S3:SecretKey"]
+        ?? throw new InvalidOperationException("S3:SecretKey is not configured");
+
+    return new AmazonS3Client(accessKey, secretKey, new AmazonS3Config
+    {
+        ServiceURL = endpoint,
+        ForcePathStyle = true,
+        AuthenticationRegion = cfg["S3:Region"] ?? "us-east-1"
+    });
+});
+builder.Services.AddSingleton<IJobBlobStorage, S3JobBlobStorage>();
+
+// Healthchecks: liveness без проб; readiness — Postgres. S3- и Parser-пробы
+// поедут в QA-эндпоинт `/api/qa/health/dependencies` на Этапе 8 (CLAUDE.md / план).
 builder.Services.AddHealthChecks()
     .AddNpgSql(
         connectionString: connectionString,

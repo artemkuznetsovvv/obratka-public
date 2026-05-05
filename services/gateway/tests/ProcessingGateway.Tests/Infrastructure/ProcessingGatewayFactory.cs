@@ -13,6 +13,13 @@ public class ProcessingGatewayFactory : WebApplicationFactory<Program>
     {
         Environment.SetEnvironmentVariable("ConnectionStrings__ProcessingDb", connectionString);
         Environment.SetEnvironmentVariable("Seq__ServerUrl", ""); // в тестах Seq не нужен
+        // Stub-конфиг для DI: smoke-тесты не дёргают Parser/S3, но Program.cs валидирует
+        // эти ключи на старте.
+        Environment.SetEnvironmentVariable("Parser__BaseUrl", "http://parser-stub");
+        Environment.SetEnvironmentVariable("S3__Endpoint", "http://minio-stub");
+        Environment.SetEnvironmentVariable("S3__AccessKey", "stub");
+        Environment.SetEnvironmentVariable("S3__SecretKey", "stub");
+        Environment.SetEnvironmentVariable("S3__BucketName", "obratka-jobs");
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)

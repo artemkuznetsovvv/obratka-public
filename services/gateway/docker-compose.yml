@@ -12,6 +12,13 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__ProcessingDb: "Host=processing-db;Port=5432;Database=processing;Username=processing_user;Password=processing_pwd"
+      # Parser локально не запускаем — base_url задан как stub, чтобы сервис стартовал;
+      # реальные вызовы пойдут с Этапа 5+ либо когда Parser-стенд будет в той же сети.
+      Parser__BaseUrl: "http://parser:8080"
+      S3__Endpoint: "http://minio:9000"
+      S3__AccessKey: "minioadmin"
+      S3__SecretKey: "minioadmin"
+      S3__BucketName: "obratka-jobs"
       Seq__ServerUrl: "http://seq:80"
       Gateway__ApiKey: "dev-gateway-api-key"
     depends_on:
