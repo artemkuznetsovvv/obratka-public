@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using ProcessingGateway.Infrastructure.Database;
@@ -11,9 +12,11 @@ using ProcessingGateway.Infrastructure.Database;
 namespace ProcessingGateway.Infrastructure.Database.Migrations
 {
     [DbContext(typeof(ProcessingDbContext))]
-    partial class ProcessingDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260505144637_AnalysisJobReviews")]
+    partial class AnalysisJobReviews
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

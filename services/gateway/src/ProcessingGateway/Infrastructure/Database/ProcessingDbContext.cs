@@ -16,6 +16,7 @@ public class ProcessingDbContext : DbContext
     public DbSet<AnalysisJob> AnalysisJobs => Set<AnalysisJob>();
     public DbSet<Review> Reviews => Set<Review>();
     public DbSet<ReviewLlmResult> ReviewLlmResults => Set<ReviewLlmResult>();
+    public DbSet<AnalysisJobReview> AnalysisJobReviews => Set<AnalysisJobReview>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -29,6 +30,25 @@ public class ProcessingDbContext : DbContext
         ConfigureAnalysisJob(modelBuilder);
         ConfigureReview(modelBuilder);
         ConfigureReviewLlmResult(modelBuilder);
+        ConfigureAnalysisJobReview(modelBuilder);
+    }
+
+    private static void ConfigureAnalysisJobReview(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<AnalysisJobReview>(b =>
+        {
+            b.ToTable("analysis_job_reviews");
+            b.HasKey(x => new { x.AnalysisJobId, x.ReviewId });
+
+            b.HasOne(x => x.Review)
+                .WithMany()
+                .HasForeignKey(x => x.ReviewId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Обратный индекс: «в каких job-ах участвовал этот review» (редко, но дёшево).
+            b.HasIndex(x => x.ReviewId)
+                .HasDatabaseName("ix_analysis_job_reviews_review");
+        });
     }
 
     private static void ConfigureAnalysisJob(ModelBuilder modelBuilder)

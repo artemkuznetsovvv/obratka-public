@@ -23,8 +23,10 @@ public class HealthCheckTests : IClassFixture<HealthCheckTests.FactoryHolder>
     }
 
     [Fact]
-    public async Task Readiness_passes_when_postgres_is_reachable()
+    public async Task Readiness_returns_ok_minimal()
     {
+        // На Этапах 1-5 readiness без проб. Реальные пробы (Postgres/RabbitMQ/S3/Parser)
+        // переедут в /api/qa/health/dependencies на Этапе 8.
         var client = _factory.CreateClient();
         var response = await client.GetAsync("/health/ready");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
