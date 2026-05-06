@@ -8,29 +8,38 @@ using ProcessingGateway.Infrastructure.Storage;
 
 namespace ProcessingGateway.Application.Pipeline;
 
-/// Собирает `input.json` для LLM, заливает в S3, публикует `LlmRequestMessage`.
-/// Публикация идёт через `IPublishEndpoint` MassTransit — Outbox перед commit
-/// обеспечивает атомарность с обновлениями БД.
+/// Собирает `input.json` для LLM, заливает в S3, отправляет `LlmRequestMessage`
+/// **напрямую в очередь** `llm.requests` через `ISendEndpointProvider.Send`
+/// (а не `IPublishEndpoint.Publish`).
+///
+/// **Почему Send, а не Publish.** LLM-сервис на Python не использует MassTransit и
+/// подписан на конкретную AMQP-очередь `llm.requests`. `Publish` через MassTransit
+/// маршрутизирует сообщение в **fanout exchange** с именем класса (`LlmRequestMessage`),
+/// который привязан к одноимённой queue, но **не** к `llm.requests` — между ними нет
+/// binding. Send явно адресует очередь и обходит exchange-routing.
+///
+/// EF Outbox поддерживает Send из scoped DI так же, как и Publish: сообщение записывается
+/// в outbox-таблицу до commit и фактически отправляется после `SaveChangesAsync`.
 public sealed class LlmDispatcher
 {
     public const string CurrentSchemaVersion = "2.0";
 
     private readonly ProcessingDbContext _db;
     private readonly IJobBlobStorage _blob;
-    private readonly IPublishEndpoint _publisher;
+    private readonly ISendEndpointProvider _sendEndpoints;
     private readonly IConfiguration _configuration;
     private readonly ILogger<LlmDispatcher> _logger;
 
     public LlmDispatcher(
         ProcessingDbContext db,
         IJobBlobStorage blob,
-        IPublishEndpoint publisher,
+        ISendEndpointProvider sendEndpoints,
         IConfiguration configuration,
         ILogger<LlmDispatcher> logger)
     {
         _db = db;
         _blob = blob;
-        _publisher = publisher;
+        _sendEndpoints = sendEndpoints;
         _configuration = configuration;
         _logger = logger;
     }
@@ -76,6 +85,7 @@ public sealed class LlmDispatcher
 
         var bucket = _configuration["S3:BucketName"]!;
         var payloadUrl = $"s3://{bucket}/{jobId}/input.json";
+        var requestQueue = _configuration["Llm:RequestQueue"] ?? "llm.requests";
         var callbackQueue = _configuration["Llm:ResultQueue"] ?? "llm.results";
 
         job.PayloadUrl = payloadUrl;
@@ -83,8 +93,9 @@ public sealed class LlmDispatcher
         job.Status = AnalysisJobStatus.SentToLlm;
         job.ReviewCount = reviews.Count;
 
-        // Publish ДО SaveChanges — Outbox присоединит сообщение к транзакции и отправит после commit.
-        await _publisher.Publish(new LlmRequestMessage(
+        // Send ДО SaveChanges — Outbox присоединит сообщение к транзакции и отправит после commit.
+        var endpoint = await _sendEndpoints.GetSendEndpoint(new Uri($"queue:{requestQueue}"));
+        await endpoint.Send(new LlmRequestMessage(
             AnalysisJobId: jobId,
             CompanyId: job.CompanyId,
             PayloadUrl: payloadUrl,
@@ -95,7 +106,7 @@ public sealed class LlmDispatcher
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
-            "LLM request published for job {AnalysisJobId}: {ReviewCount} reviews, payload={PayloadUrl}",
-            jobId, reviews.Count, payloadUrl);
+            "LLM request sent to {Queue} for job {AnalysisJobId}: {ReviewCount} reviews, payload={PayloadUrl}",
+            requestQueue, jobId, reviews.Count, payloadUrl);
     }
 }
