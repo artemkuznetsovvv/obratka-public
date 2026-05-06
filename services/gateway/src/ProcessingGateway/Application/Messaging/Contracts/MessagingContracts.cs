@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace ProcessingGateway.Application.Messaging.Contracts;
 
 /// Команда «запустить анализ» — публикуется Web API (когда появится) либо QA-эндпоинтом
@@ -61,21 +63,27 @@ public record AggregatesReadyEvent(
 // --- LLM transport (claim-check, ADR-004) ---
 
 /// Публикуется в `Llm__RequestQueue` для внешнего LLM-сервиса.
+/// `[JsonPropertyName]` — snake_case на проводе (Python-LLM читает body.message.analysis_job_id),
+/// независимо от глобальной MassTransit naming policy.
 public record LlmRequestMessage(
-    Guid AnalysisJobId,
-    Guid CompanyId,
-    string PayloadUrl,                  // s3://obratka-jobs/{jobId}/input.json
-    int ReviewCount,
-    string SchemaVersion,               // "2.0"
-    string CallbackQueue);              // "llm.results"
+    [property: JsonPropertyName("analysis_job_id")] Guid AnalysisJobId,
+    [property: JsonPropertyName("company_id")] Guid CompanyId,
+    [property: JsonPropertyName("payload_url")] string PayloadUrl,           // s3://obratka-jobs/{jobId}/input.json
+    [property: JsonPropertyName("review_count")] int ReviewCount,
+    [property: JsonPropertyName("schema_version")] string SchemaVersion,     // "2.0"
+    [property: JsonPropertyName("callback_queue")] string CallbackQueue);    // "llm.results"
 
 /// LLM публикует в `Llm__ResultQueue` (raw JSON, без MassTransit envelope).
 /// PG-consumer для этой очереди настроен на `UseRawJsonDeserializer()`.
 /// Schema 2.0: два URL вместо одного (output_reviews.json + output_summary.json).
+///
+/// `[JsonPropertyName]` — обязательно, иначе snake_case-ключи Python-стороны не мэтчатся
+/// с PascalCase-свойствами C# record-а → все поля кроме `Status` (case-insensitive
+/// match) становятся null → consumer бросает исключение → infinite retry.
 public record LlmResultMessage(
-    Guid AnalysisJobId,
-    string Status,                      // "finished" | "failed"
-    string? ResultReviewsUrl,           // s3://obratka-jobs/{jobId}/output_reviews.json — при finished
-    string? ResultSummaryUrl,           // s3://obratka-jobs/{jobId}/output_summary.json — при finished
-    string SchemaVersion,
-    string? Error);
+    [property: JsonPropertyName("analysis_job_id")] Guid AnalysisJobId,
+    [property: JsonPropertyName("status")] string Status,                    // "finished" | "failed"
+    [property: JsonPropertyName("result_reviews_url")] string? ResultReviewsUrl, // при finished
+    [property: JsonPropertyName("result_summary_url")] string? ResultSummaryUrl, // при finished
+    [property: JsonPropertyName("schema_version")] string SchemaVersion,
+    [property: JsonPropertyName("error")] string? Error);
