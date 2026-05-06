@@ -68,6 +68,12 @@ builder.Services.AddMassTransit(x =>
             minInterval: TimeSpan.FromSeconds(1),
             maxInterval: TimeSpan.FromSeconds(15),
             intervalDelta: TimeSpan.FromSeconds(2)));
+
+        // Стуб публикует LlmResultMessage как raw JSON — точно так же, как реальный LLM-сервис
+        // (см. LLM_PYTHON_QUICKSTART.md §4). PG-сторона ожидает raw на `llm.results`.
+        // `AnyMessageType` — потому что мы единственный publisher этого типа на этом эндпоинте.
+        cfg.UseRawJsonSerializer(RawSerializerOptions.AnyMessageType);
+
         cfg.ConfigureEndpoints(context);
     });
 });

@@ -1,18 +1,24 @@
 using System.Text.Json;
 using Dapper;
 using ProcessingGateway.Application.Llm;
+using ProcessingGateway.Domain;
 
 namespace ProcessingGateway.Infrastructure.Database;
 
-/// Bulk-INSERT LLM-результатов в `review_llm_results`. Идемпотентность через UNIQUE
-/// `(review_id, analysis_job_id)` + `ON CONFLICT DO NOTHING` — при повторной доставке
-/// `LlmResultMessage` от LLM (или брокера) дубль молча отбрасывается.
+/// Bulk-INSERT LLM-результатов в `review_llm_results` (schema 2.0).
+/// Идемпотентность через UNIQUE `(review_id, analysis_job_id)` + `ON CONFLICT DO NOTHING`.
 ///
-/// `fake_reason_tags` и `topics` — JSONB, передаются через text-сериализацию + cast `::jsonb`,
-/// иначе Dapper не понимает сложные параметры в jsonb-колонке.
+/// `aspects` — JSONB; пишется как сериализованный list&lt;ReviewAspect&gt; в snake_case
+/// (тот же JsonOptions, что в `ProcessingDbContext.JsonStringConverter`, чтобы EF при чтении
+/// видел те же ключи).
 public sealed class ReviewLlmResultBulkInserter
 {
-    private static readonly JsonSerializerOptions JsonOptions = new();
+    /// Должен совпадать с `ProcessingDbContext.JsonOptions` (snake_case + WhenWritingNull).
+    private static readonly JsonSerializerOptions AspectsJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    };
 
     private readonly IDbConnectionFactory _factory;
 
@@ -20,40 +26,41 @@ public sealed class ReviewLlmResultBulkInserter
 
     private const string Sql = @"
         INSERT INTO review_llm_results
-            (review_id, analysis_job_id, fake_status, fake_reason_tags,
-             sentiment, sentiment_confidence, is_spam, spam_confidence, topics, processed_at)
+            (review_id, analysis_job_id, overall_sentiment, overall_confidence, aspects, processed_at)
         SELECT
-            review_id, analysis_job_id, fake_status, fake_reason_tags::jsonb,
-            sentiment, sentiment_confidence, is_spam, spam_confidence, topics::jsonb, NOW()
+            review_id, analysis_job_id, overall_sentiment, overall_confidence, aspects::jsonb, NOW()
         FROM UNNEST(
-            @ReviewIds, @AnalysisJobIds, @FakeStatuses, @FakeReasonTagsJson,
-            @Sentiments, @SentimentConfidences, @IsSpams, @SpamConfidences, @TopicsJson
+            @ReviewIds, @AnalysisJobIds, @OverallSentiments, @OverallConfidences, @AspectsJson
         ) AS t(
-            review_id, analysis_job_id, fake_status, fake_reason_tags,
-            sentiment, sentiment_confidence, is_spam, spam_confidence, topics
+            review_id, analysis_job_id, overall_sentiment, overall_confidence, aspects
         )
         ON CONFLICT (review_id, analysis_job_id) DO NOTHING;";
 
     public async Task<int> InsertAsync(
         Guid analysisJobId,
-        IReadOnlyList<LlmProcessedReview> processed,
+        IReadOnlyList<LlmReviewResult> reviews,
         CancellationToken ct = default)
     {
-        if (processed.Count == 0) return 0;
+        if (reviews.Count == 0) return 0;
 
         await using var conn = await _factory.OpenAsync(ct);
 
         var parameters = new
         {
-            ReviewIds            = processed.Select(p => p.ReviewId).ToArray(),
-            AnalysisJobIds       = Enumerable.Repeat(analysisJobId, processed.Count).ToArray(),
-            FakeStatuses         = processed.Select(p => p.FakeStatus).ToArray(),
-            FakeReasonTagsJson   = processed.Select(p => JsonSerializer.Serialize(p.FakeReasonTags, JsonOptions)).ToArray(),
-            Sentiments           = processed.Select(p => p.Sentiment).ToArray(),
-            SentimentConfidences = processed.Select(p => p.SentimentConfidence).ToArray(),
-            IsSpams              = processed.Select(p => p.IsSpam).ToArray(),
-            SpamConfidences      = processed.Select(p => p.SpamConfidence).ToArray(),
-            TopicsJson           = processed.Select(p => JsonSerializer.Serialize(p.Topics, JsonOptions)).ToArray()
+            ReviewIds          = reviews.Select(r => r.ReviewId).ToArray(),
+            AnalysisJobIds     = Enumerable.Repeat(analysisJobId, reviews.Count).ToArray(),
+            OverallSentiments  = reviews.Select(r => r.OverallSentiment).ToArray(),
+            OverallConfidences = reviews.Select(r => r.OverallConfidence).ToArray(),
+            AspectsJson        = reviews.Select(r => JsonSerializer.Serialize(
+                r.Aspects.Select(a => new ReviewAspect
+                {
+                    Topic = a.Topic,
+                    Sentiment = a.Sentiment,
+                    Confidence = a.Confidence,
+                    Fragment = a.Fragment ?? "",
+                    IsFreeform = a.IsFreeform
+                }).ToList(),
+                AspectsJsonOptions)).ToArray()
         };
 
         return await conn.ExecuteAsync(new CommandDefinition(Sql, parameters, cancellationToken: ct));

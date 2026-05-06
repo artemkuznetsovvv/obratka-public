@@ -1,7 +1,11 @@
 namespace ProcessingGateway.Domain;
 
-/// Результат LLM per review. Схема — ADR-002 §«Схема таблиц». PK = bigint identity
-/// (см. отклонение в Review.cs). FK `review_id` — bigint на `reviews.id`.
+/// Per-review результат LLM (schema 2.0). PK = bigint identity.
+/// FK `review_id` — bigint на `reviews.id`.
+///
+/// Изменения относительно 1.0:
+/// - удалены `FakeStatus`, `FakeReasonTags`, `IsSpam`, `SpamConfidence`, `Topics`
+/// - добавлены `OverallSentiment` (русский enum), `OverallConfidence`, `Aspects` (JSONB)
 public class ReviewLlmResult
 {
     public long Id { get; set; }
@@ -11,22 +15,29 @@ public class ReviewLlmResult
 
     public Guid AnalysisJobId { get; set; }
 
-    /// "normal" | "suspicious" | "fake" — slug-формат от LLM.
-    public required string FakeStatus { get; set; }
+    /// "позитивный" | "негативный" | "нейтральный" — закрытый русский enum от LLM-сервиса.
+    public required string OverallSentiment { get; set; }
 
-    /// JSONB, например ["однотипный текст", "массовая публикация"].
-    public List<string> FakeReasonTags { get; set; } = new();
+    /// 0.0..1.0. При `0.0` обычно `Aspects` пустой — модель не нашла уверенного сигнала.
+    public double OverallConfidence { get; set; }
 
-    /// "very_negative" | "negative" | "neutral" | "positive" | "very_positive". null при неуверенности LLM.
-    public string? Sentiment { get; set; }
-
-    public double? SentimentConfidence { get; set; }
-
-    public bool IsSpam { get; set; }
-    public double SpamConfidence { get; set; }
-
-    /// JSONB + GIN-индекс для фильтра «отзывы по теме» в Web API Analytics.
-    public List<string> Topics { get; set; } = new();
+    /// JSONB + GIN-индекс для фильтра «отзывы с темой X / тональностью Y».
+    /// Один и тот же `Topic` может встречаться **несколько раз** с разной тональностью.
+    public List<ReviewAspect> Aspects { get; set; } = new();
 
     public DateTimeOffset ProcessedAt { get; set; }
+}
+
+/// Один aspect-объект внутри `ReviewLlmResult.Aspects`.
+public class ReviewAspect
+{
+    public string Topic { get; set; } = "";
+    public string Sentiment { get; set; } = "";
+    public double Confidence { get; set; }
+
+    /// Цитата из текста отзыва. Может быть пустой строкой.
+    public string Fragment { get; set; } = "";
+
+    /// `true` если `Topic` не из закрытого справочника тем.
+    public bool IsFreeform { get; set; }
 }

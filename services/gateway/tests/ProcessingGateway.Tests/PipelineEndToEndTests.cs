@@ -145,7 +145,7 @@ public class PipelineEndToEndTests : IAsyncLifetime
         using var reader = new StreamReader(inputResp.ResponseStream);
         var inputJson = await reader.ReadToEndAsync();
 
-        inputJson.Should().Contain("\"schema_version\":\"1.0\"");
+        inputJson.Should().Contain("\"schema_version\":\"2.0\"");
         inputJson.Should().Contain($"\"analysis_job_id\":\"{jobId}\"");
         inputJson.Should().Contain($"\"company_id\":\"{companyId}\"");
         // 4 отзыва из фикстуры

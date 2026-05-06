@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MassTransit;
 using ProcessingGateway.Application.Llm;
 using ProcessingGateway.Application.Messaging.Contracts;
@@ -6,14 +7,14 @@ using LogContext = Serilog.Context.LogContext;
 
 namespace ProcessingGateway.LlmStub;
 
-/// LLM-стуб: имитирует внешний LLM-сервис из ADR-004. Слушает `Llm__RequestQueue`,
-/// читает `input.json` из S3, синтезирует наивный output и публикует `LlmResultMessage`
-/// в `Llm__ResultQueue`. Полностью совместим с реальным LLM по контракту:
-/// PG ничего не должен знать о том, кто на другой стороне очереди — стуб или живой сервис.
+/// LLM-стуб (schema 2.0): имитирует внешний LLM-сервис.
 ///
-/// Эвристики максимально простые (текст ↔ ключевые слова, fallback по stars). Цель —
-/// дать осмысленные данные для разработки фронтенда и тестирования pipeline-ингеста,
-/// не подменять реальную LLM.
+/// Слушает `Llm__RequestQueue`, читает `input.json`, синтезирует:
+///   - `output_reviews.json` — per-review aspect-based анализ (наивные эвристики)
+///   - `output_summary.json` — job-level summary + 3 заглушечные рекомендации
+///
+/// Публикует **raw JSON** `LlmResultMessage` в `Llm__ResultQueue` (без MT envelope) —
+/// тем же транспортом, что использует реальный LLM-сервис, см. LLM_PYTHON_QUICKSTART.md §4.
 public sealed class LlmRequestMessageConsumer : IConsumer<LlmRequestMessage>
 {
     private readonly IJobBlobStorage _blob;
@@ -38,30 +39,38 @@ public sealed class LlmRequestMessageConsumer : IConsumer<LlmRequestMessage>
         {
             var input = await _blob.ReadInputAsync(msg.AnalysisJobId, context.CancellationToken);
 
-            var processed = input.Reviews.Select(SynthesizeProcessedReview).ToList();
-            var output = new LlmOutput(
+            var reviews = input.Reviews.Select(SynthesizeReviewResult).ToList();
+            var reviewsOutput = new LlmReviewsOutput(
                 SchemaVersion: msg.SchemaVersion,
                 AnalysisJobId: msg.AnalysisJobId,
-                Recommendation: BuildRecommendation(processed),
-                ProcessedReview: processed);
+                Reviews: reviews);
+            await _blob.WriteReviewsOutputAsync(msg.AnalysisJobId, reviewsOutput, context.CancellationToken);
 
-            await _blob.WriteOutputAsync(msg.AnalysisJobId, output, context.CancellationToken);
+            var recommendations = BuildRecommendations(reviews);
+            var summary = BuildSummary(reviews);
+            var summaryOutput = new LlmSummaryOutput(
+                SchemaVersion: msg.SchemaVersion,
+                AnalysisJobId: msg.AnalysisJobId,
+                RecommendationsCount: recommendations.Count,
+                Summary: summary,
+                FullRecommendations: recommendations);
+            await _blob.WriteSummaryOutputAsync(msg.AnalysisJobId, summaryOutput, context.CancellationToken);
 
-            // Парсим bucket из payloadUrl чтобы построить такой же result_url —
-            // у LLM могут быть свои bucket-настройки, но в нашем стубе тот же bucket.
             var (bucket, _) = S3UrlParser.Parse(msg.PayloadUrl);
-            var resultUrl = $"s3://{bucket}/{msg.AnalysisJobId}/output.json";
+            var reviewsUrl = $"s3://{bucket}/{msg.AnalysisJobId}/output_reviews.json";
+            var summaryUrl = $"s3://{bucket}/{msg.AnalysisJobId}/output_summary.json";
 
             await context.Publish(new LlmResultMessage(
                 AnalysisJobId: msg.AnalysisJobId,
                 Status: "finished",
-                ResultUrl: resultUrl,
+                ResultReviewsUrl: reviewsUrl,
+                ResultSummaryUrl: summaryUrl,
                 SchemaVersion: msg.SchemaVersion,
                 Error: null), context.CancellationToken);
 
             _logger.LogInformation(
-                "LLM stub finished: {ProcessedCount} reviews → {ResultUrl}",
-                processed.Count, resultUrl);
+                "LLM stub finished: {ReviewsCount} reviews + {RecsCount} recs → {ReviewsUrl}, {SummaryUrl}",
+                reviews.Count, recommendations.Count, reviewsUrl, summaryUrl);
         }
         catch (Exception ex)
         {
@@ -69,13 +78,14 @@ public sealed class LlmRequestMessageConsumer : IConsumer<LlmRequestMessage>
             await context.Publish(new LlmResultMessage(
                 AnalysisJobId: msg.AnalysisJobId,
                 Status: "failed",
-                ResultUrl: null,
+                ResultReviewsUrl: null,
+                ResultSummaryUrl: null,
                 SchemaVersion: msg.SchemaVersion,
                 Error: ex.Message), context.CancellationToken);
         }
     }
 
-    // --- эвристики ---
+    // --- эвристики (schema 2.0) ---
 
     private static readonly string[] PositiveMarkers =
     {
@@ -89,57 +99,85 @@ public sealed class LlmRequestMessageConsumer : IConsumer<LlmRequestMessage>
         "👎", "😠", "bad", "terrible", "awful"
     };
 
-    private static LlmProcessedReview SynthesizeProcessedReview(LlmInputReview r)
+    private static LlmReviewResult SynthesizeReviewResult(LlmInputReview r)
     {
         var lower = r.Text.ToLowerInvariant();
         var posHits = PositiveMarkers.Count(m => lower.Contains(m));
         var negHits = NegativeMarkers.Count(m => lower.Contains(m));
 
-        string sentiment;
-        double confidence;
+        string overallSentiment;
+        double overallConfidence;
         if (posHits > negHits && posHits > 0)
         {
-            sentiment = posHits >= 2 ? "very_positive" : "positive";
-            confidence = Math.Min(0.6 + 0.1 * posHits, 0.95);
+            overallSentiment = "позитивный";
+            overallConfidence = Math.Min(0.6 + 0.1 * posHits, 0.95);
         }
         else if (negHits > posHits && negHits > 0)
         {
-            sentiment = negHits >= 2 ? "very_negative" : "negative";
-            confidence = Math.Min(0.6 + 0.1 * negHits, 0.95);
+            overallSentiment = "негативный";
+            overallConfidence = Math.Min(0.6 + 0.1 * negHits, 0.95);
         }
         else
         {
-            sentiment = r.Stars switch
+            overallSentiment = r.Stars switch
             {
-                5 => "very_positive",
-                4 => "positive",
-                3 => "neutral",
-                2 => "negative",
-                1 => "very_negative",
-                _ => "neutral"
+                >= 4 => "позитивный",
+                3 => "нейтральный",
+                <= 2 and > 0 => "негативный",
+                _ => "нейтральный"
             };
-            confidence = r.Stars.HasValue ? 0.55 : 0.40;
+            overallConfidence = r.Stars.HasValue ? 0.55 : 0.40;
         }
 
-        return new LlmProcessedReview(
+        // Stub aspects: один общий aspect "общее впечатление" с тем же sentiment.
+        var aspects = new List<LlmAspect>
+        {
+            new(Topic: "общее впечатление",
+                Sentiment: overallSentiment,
+                Confidence: overallConfidence,
+                Fragment: "",
+                IsFreeform: false)
+        };
+
+        return new LlmReviewResult(
             ReviewId: r.ReviewId,
-            FakeStatus: "normal",
-            FakeReasonTags: Array.Empty<string>(),
-            Sentiment: sentiment,
-            SentimentConfidence: confidence,
-            IsSpam: false,
-            SpamConfidence: 0.05,
-            Topics: Array.Empty<string>());
+            Text: r.Text,
+            OverallSentiment: overallSentiment,
+            OverallConfidence: overallConfidence,
+            Aspects: aspects);
     }
 
-    private static string BuildRecommendation(IReadOnlyList<LlmProcessedReview> processed)
+    private static List<LlmRecommendation> BuildRecommendations(IReadOnlyList<LlmReviewResult> reviews)
     {
-        var positive = processed.Count(p => p.Sentiment is "positive" or "very_positive");
-        var negative = processed.Count(p => p.Sentiment is "negative" or "very_negative");
-        var total = Math.Max(processed.Count, 1);
+        var positive = reviews.Count(r => r.OverallSentiment == "позитивный");
+        var negative = reviews.Count(r => r.OverallSentiment == "негативный");
+        var total = Math.Max(reviews.Count, 1);
 
-        return $"(stub) Анализ {processed.Count} отзывов: " +
+        return new List<LlmRecommendation>
+        {
+            new(Priority: 1,
+                Topic: "качество обслуживания",
+                Title: "(stub) Усилить положительные практики",
+                Body: $"По {positive * 100 / total}% отзывов виден позитив — масштабировать удачные практики.",
+                ExpectedImpact: "Удержание клиентов, рост рейтинга.",
+                Evidence: Array.Empty<string>()),
+            new(Priority: 2,
+                Topic: "обратная связь",
+                Title: "(stub) Закрыть негативные кейсы",
+                Body: $"{negative * 100 / total}% отзывов негативные — реагировать в течение 24 часов.",
+                ExpectedImpact: "Снижение оттока, повышение NPS.",
+                Evidence: Array.Empty<string>())
+        };
+    }
+
+    private static string BuildSummary(IReadOnlyList<LlmReviewResult> reviews)
+    {
+        var positive = reviews.Count(r => r.OverallSentiment == "позитивный");
+        var negative = reviews.Count(r => r.OverallSentiment == "негативный");
+        var total = Math.Max(reviews.Count, 1);
+
+        return $"(stub) Анализ {reviews.Count} отзывов: " +
                $"позитив {positive * 100 / total}%, негатив {negative * 100 / total}%. " +
-               "Реальные рекомендации появятся, когда подключится живая LLM.";
+               "Реальные рекомендации появятся при подключении живой LLM.";
     }
 }

@@ -1,6 +1,5 @@
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
-using ProcessingGateway.Application.Llm;
 using ProcessingGateway.Application.Messaging.Contracts;
 using ProcessingGateway.Domain;
 using ProcessingGateway.Infrastructure.Database;
@@ -8,40 +7,43 @@ using ProcessingGateway.Infrastructure.Storage;
 
 namespace ProcessingGateway.Application.Pipeline;
 
-/// Принимает `LlmResultMessage`, читает `output.json` из S3, сохраняет per-review
-/// результаты + recommendation, переводит job в `computing_aggregates` и публикует
-/// `AnalysisCompletedEvent` для Web API Analytics.
+/// Принимает `LlmResultMessage`, читает `output_reviews.json` + `output_summary.json` из S3,
+/// сохраняет per-review результаты + summary + recommendations, переводит job в
+/// `computing_aggregates` и публикует `AnalysisCompletedEvent` для Web API Analytics.
 ///
-/// Идемпотентен: повторное применение одного и того же output.json безопасно (UNIQUE
-/// review_id+analysis_job_id + проверка статуса перед переходом).
-///
-/// Методы `IngestFinishedAsync` / `IngestFailedAsync` намеренно публичные и не
-/// привязаны к источнику триггера — сейчас вызываются из `LlmResultMessageConsumer`
-/// (брокер), в будущем тот же путь использует `LlmStatusReconciler` (REST-fallback,
-/// Этап 7 отложен — см. IMPLEMENTATION_PLAN.md).
+/// Идемпотентен: повторное применение одного и того же result безопасно (UNIQUE
+/// review_id+analysis_job_id для review_llm_results, DELETE+INSERT для analysis_recommendations,
+/// проверка статуса перед переходом).
 public sealed class LlmResultIngestor
 {
     private readonly ProcessingDbContext _db;
     private readonly IJobBlobStorage _blob;
-    private readonly ReviewLlmResultBulkInserter _inserter;
+    private readonly ReviewLlmResultBulkInserter _reviewsInserter;
+    private readonly AnalysisRecommendationWriter _recommendationsWriter;
     private readonly IPublishEndpoint _publisher;
     private readonly ILogger<LlmResultIngestor> _logger;
 
     public LlmResultIngestor(
         ProcessingDbContext db,
         IJobBlobStorage blob,
-        ReviewLlmResultBulkInserter inserter,
+        ReviewLlmResultBulkInserter reviewsInserter,
+        AnalysisRecommendationWriter recommendationsWriter,
         IPublishEndpoint publisher,
         ILogger<LlmResultIngestor> logger)
     {
         _db = db;
         _blob = blob;
-        _inserter = inserter;
+        _reviewsInserter = reviewsInserter;
+        _recommendationsWriter = recommendationsWriter;
         _publisher = publisher;
         _logger = logger;
     }
 
-    public async Task IngestFinishedAsync(Guid jobId, string resultUrl, CancellationToken ct = default)
+    public async Task IngestFinishedAsync(
+        Guid jobId,
+        string resultReviewsUrl,
+        string resultSummaryUrl,
+        CancellationToken ct = default)
     {
         var job = await _db.AnalysisJobs.FirstOrDefaultAsync(j => j.Id == jobId, ct);
         if (job is null)
@@ -63,34 +65,68 @@ public sealed class LlmResultIngestor
             return;
         }
 
-        var output = await _blob.ReadOutputAsync(jobId, ct);
+        // Скачиваем оба файла. Ошибка в любом — job → failed.
+        var reviewsOutput  = await _blob.ReadReviewsOutputAsync(resultReviewsUrl, ct);
+        var summaryOutput  = await _blob.ReadSummaryOutputAsync(resultSummaryUrl, ct);
 
-        if (output.AnalysisJobId != jobId)
+        // Валидация: оба analysis_job_id должны совпадать с request.
+        if (reviewsOutput.AnalysisJobId != jobId)
         {
-            _logger.LogError(
-                "output.json declared analysis_job_id={DeclaredJobId} but expected {ExpectedJobId}",
-                output.AnalysisJobId, jobId);
-            await FailAsync(job, $"LLM output mismatch: expected {jobId}, got {output.AnalysisJobId}", ct);
+            await FailAsync(job,
+                $"output_reviews.json analysis_job_id mismatch: expected {jobId}, got {reviewsOutput.AnalysisJobId}",
+                ct);
+            return;
+        }
+        if (summaryOutput.AnalysisJobId != jobId)
+        {
+            await FailAsync(job,
+                $"output_summary.json analysis_job_id mismatch: expected {jobId}, got {summaryOutput.AnalysisJobId}",
+                ct);
             return;
         }
 
-        if (!string.Equals(output.SchemaVersion, LlmDispatcher.CurrentSchemaVersion,
-            StringComparison.OrdinalIgnoreCase))
+        // Schema_version warning-only — tolerant deserializer (см. диалог по эволюции схемы).
+        if (!string.Equals(reviewsOutput.SchemaVersion, LlmDispatcher.CurrentSchemaVersion,
+                StringComparison.OrdinalIgnoreCase))
         {
-            // Решение по эволюции схемы (см. диалог: tolerant deserialization + warning).
-            // На MAJOR-конфликте лучше отбросить, на MINOR — продолжить. Сейчас единственный.
             _logger.LogWarning(
-                "LLM output schema_version={Got} differs from expected {Expected}; continuing tolerant",
-                output.SchemaVersion, LlmDispatcher.CurrentSchemaVersion);
+                "output_reviews.json schema_version={Got} differs from expected {Expected}; continuing tolerant",
+                reviewsOutput.SchemaVersion, LlmDispatcher.CurrentSchemaVersion);
+        }
+        if (!string.Equals(summaryOutput.SchemaVersion, LlmDispatcher.CurrentSchemaVersion,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning(
+                "output_summary.json schema_version={Got} differs from expected {Expected}; continuing tolerant",
+                summaryOutput.SchemaVersion, LlmDispatcher.CurrentSchemaVersion);
         }
 
-        var inserted = await _inserter.InsertAsync(jobId, output.ProcessedReview, ct);
-        _logger.LogInformation(
-            "Saved {Inserted} LLM results for job {AnalysisJobId} ({TotalProvided} provided by LLM)",
-            inserted, jobId, output.ProcessedReview.Count);
+        // Инвариант от LLM-команды: recommendations_count == len(full_recommendations).
+        if (summaryOutput.RecommendationsCount != summaryOutput.FullRecommendations.Count)
+        {
+            _logger.LogWarning(
+                "output_summary.json recommendations_count={Declared} != len(full_recommendations)={Actual}; using actual",
+                summaryOutput.RecommendationsCount, summaryOutput.FullRecommendations.Count);
+        }
 
-        job.Recommendation = output.Recommendation;
-        job.ResultUrl = resultUrl;
+        // Bulk insert per-review результатов (ON CONFLICT DO NOTHING).
+        var insertedReviews = await _reviewsInserter.InsertAsync(jobId, reviewsOutput.Reviews, ct);
+        _logger.LogInformation(
+            "Saved {Inserted} per-review LLM results for job {AnalysisJobId} ({TotalProvided} provided by LLM)",
+            insertedReviews, jobId, reviewsOutput.Reviews.Count);
+
+        // DELETE + bulk INSERT recommendations (replay-идемпотентность).
+        var insertedRecs = await _recommendationsWriter.ReplaceAllAsync(
+            jobId, summaryOutput.FullRecommendations, ct);
+        _logger.LogInformation(
+            "Replaced recommendations for job {AnalysisJobId}: {Count} rows",
+            jobId, insertedRecs);
+
+        // Обновляем job-метаданные.
+        job.Summary = summaryOutput.Summary;
+        job.RecommendationsCount = summaryOutput.FullRecommendations.Count;
+        job.ResultReviewsUrl = resultReviewsUrl;
+        job.ResultSummaryUrl = resultSummaryUrl;
         job.Status = AnalysisJobStatus.ComputingAggregates;
 
         // Решаем completed_pending_aggregates vs partial по наличию failed-источников.

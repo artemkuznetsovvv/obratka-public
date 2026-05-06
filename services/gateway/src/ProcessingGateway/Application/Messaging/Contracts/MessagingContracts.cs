@@ -66,13 +66,16 @@ public record LlmRequestMessage(
     Guid CompanyId,
     string PayloadUrl,                  // s3://obratka-jobs/{jobId}/input.json
     int ReviewCount,
-    string SchemaVersion,               // "1.0" сейчас
+    string SchemaVersion,               // "2.0"
     string CallbackQueue);              // "llm.results"
 
-/// LLM публикует в `Llm__ResultQueue`. PG слушает.
+/// LLM публикует в `Llm__ResultQueue` (raw JSON, без MassTransit envelope).
+/// PG-consumer для этой очереди настроен на `UseRawJsonDeserializer()`.
+/// Schema 2.0: два URL вместо одного (output_reviews.json + output_summary.json).
 public record LlmResultMessage(
     Guid AnalysisJobId,
     string Status,                      // "finished" | "failed"
-    string? ResultUrl,                  // s3://obratka-jobs/{jobId}/output.json — присутствует при finished
+    string? ResultReviewsUrl,           // s3://obratka-jobs/{jobId}/output_reviews.json — при finished
+    string? ResultSummaryUrl,           // s3://obratka-jobs/{jobId}/output_summary.json — при finished
     string SchemaVersion,
     string? Error);

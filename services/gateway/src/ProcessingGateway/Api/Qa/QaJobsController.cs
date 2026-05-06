@@ -5,8 +5,8 @@ using Microsoft.AspNetCore.Mvc;
 namespace ProcessingGateway.Api.Qa;
 
 /// QA-эндпоинты для S3-блобов конкретного job-а: listing + raw-content
-/// (raw/{source}.json, input.json, output.json). Удобно для отладки —
-/// одной командой получить картину «что есть в хранилище для этого job-а».
+/// (raw/{source}.json, input.json, output_reviews.json, output_summary.json).
+/// Удобно для отладки — одной командой получить картину «что есть в хранилище».
 [ApiController]
 [Route("api/qa/jobs")]
 [RequireQaApiKey]
@@ -44,19 +44,21 @@ public sealed class QaJobsController : ControllerBase
     }
 
     /// Тело конкретного блоба. Поток без буферизации — для произвольного размера.
-    /// Только raw/{source}.json, input.json, output.json — белый список, чтобы
-    /// случайно не отдать внешний объект. `{*name}` — catch-all, чтобы пропустить
-    /// слэш в `raw/yandex`.
+    /// Белый список: raw/{source}, input, output_reviews, output_summary
+    /// (а также короткое `output` как алиас на output_reviews для совместимости).
+    /// `{*name}` — catch-all, чтобы пропустить слэш в `raw/yandex`.
     [HttpGet("{jobId:guid}/blobs/{*name}")]
     public async Task<IActionResult> GetBlob(Guid jobId, string name, CancellationToken ct)
     {
         var key = ResolveKey(jobId, name);
-        if (key is null) return BadRequest(new { error = $"Unknown blob name '{name}'. Allowed: input, output, raw/<source>" });
+        if (key is null) return BadRequest(new
+        {
+            error = $"Unknown blob name '{name}'. Allowed: input, output_reviews, output_summary, raw/<source>"
+        });
 
         try
         {
             var resp = await _s3.GetObjectAsync(_bucket, key, ct);
-            // Дублируем ResponseStream чтобы Aspnet смог его задиспозить вместе с Response.
             var ms = new MemoryStream();
             await resp.ResponseStream.CopyToAsync(ms, ct);
             ms.Position = 0;
@@ -68,11 +70,12 @@ public sealed class QaJobsController : ControllerBase
         }
     }
 
-    /// `input` / `output` / `raw/yandex` (со слэшем).
+    /// `input` / `output_reviews` / `output_summary` / `raw/yandex` (со слэшем).
     private static string? ResolveKey(Guid jobId, string name) => name.ToLowerInvariant() switch
     {
         "input" => $"{jobId}/input.json",
-        "output" => $"{jobId}/output.json",
+        "output_reviews" => $"{jobId}/output_reviews.json",
+        "output_summary" => $"{jobId}/output_summary.json",
         var s when s.StartsWith("raw/") =>
             // raw/yandex → {jobId}/raw/yandex.json
             $"{jobId}/{s}.json",

@@ -93,30 +93,58 @@ public class QaEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task LlmInject_writes_output_and_publishes_finished()
+    public async Task LlmInject_writes_outputs_and_publishes_finished()
     {
         var jobId = await SeedJobAsync(AnalysisJobStatus.SentToLlm);
 
-        var output = new LlmOutput(
-            SchemaVersion: "1.0",
-            AnalysisJobId: jobId,
-            Recommendation: "via inject",
-            ProcessedReview: new[]
-            {
-                new LlmProcessedReview(1, "normal", Array.Empty<string>(),
-                    "positive", 0.9, false, 0.05, Array.Empty<string>())
-            });
+        var injectBody = new ProcessingGateway.Api.Qa.QaLlmController.InjectRequest(
+            Reviews: new LlmReviewsOutput(
+                SchemaVersion: "2.0",
+                AnalysisJobId: jobId,
+                Reviews: new[]
+                {
+                    new LlmReviewResult(
+                        ReviewId: 1,
+                        Text: "тестовый отзыв",
+                        OverallSentiment: "позитивный",
+                        OverallConfidence: 0.9,
+                        Aspects: new[]
+                        {
+                            new LlmAspect("общее впечатление", "позитивный", 0.9, "", false)
+                        })
+                }),
+            Summary: new LlmSummaryOutput(
+                SchemaVersion: "2.0",
+                AnalysisJobId: jobId,
+                RecommendationsCount: 1,
+                Summary: "via inject",
+                FullRecommendations: new[]
+                {
+                    new LlmRecommendation(
+                        Priority: 1,
+                        Topic: "качество",
+                        Title: "тестовая рекомендация",
+                        Body: "сделать лучше",
+                        ExpectedImpact: "рост рейтинга",
+                        Evidence: Array.Empty<string>())
+                }));
 
         var client = _factory.CreateClient();
-        var response = await client.PostAsJsonAsync($"/api/qa/llm/inject/{jobId}", output);
+        var response = await client.PostAsJsonAsync($"/api/qa/llm/inject/{jobId}", injectBody);
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
 
-        // output.json должен оказаться в MinIO
+        // оба output-файла должны оказаться в MinIO
         using var s3 = _minio.CreateClient();
-        using var resp = await s3.GetObjectAsync(MinioFixture.BucketName, $"{jobId}/output.json");
-        using var reader = new StreamReader(resp.ResponseStream);
-        var json = await reader.ReadToEndAsync();
-        json.Should().Contain("via inject").And.Contain("\"review_id\":1");
+
+        using var reviewsResp = await s3.GetObjectAsync(MinioFixture.BucketName, $"{jobId}/output_reviews.json");
+        using var reviewsReader = new StreamReader(reviewsResp.ResponseStream);
+        var reviewsJson = await reviewsReader.ReadToEndAsync();
+        reviewsJson.Should().Contain("\"review_id\":1").And.Contain("позитивный");
+
+        using var summaryResp = await s3.GetObjectAsync(MinioFixture.BucketName, $"{jobId}/output_summary.json");
+        using var summaryReader = new StreamReader(summaryResp.ResponseStream);
+        var summaryJson = await summaryReader.ReadToEndAsync();
+        summaryJson.Should().Contain("via inject").And.Contain("тестовая рекомендация");
     }
 
     [Fact]

@@ -17,6 +17,7 @@ public class ProcessingDbContext : DbContext
     public DbSet<Review> Reviews => Set<Review>();
     public DbSet<ReviewLlmResult> ReviewLlmResults => Set<ReviewLlmResult>();
     public DbSet<AnalysisJobReview> AnalysisJobReviews => Set<AnalysisJobReview>();
+    public DbSet<AnalysisRecommendation> AnalysisRecommendations => Set<AnalysisRecommendation>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -31,6 +32,7 @@ public class ProcessingDbContext : DbContext
         ConfigureReview(modelBuilder);
         ConfigureReviewLlmResult(modelBuilder);
         ConfigureAnalysisJobReview(modelBuilder);
+        ConfigureAnalysisRecommendation(modelBuilder);
     }
 
     private static void ConfigureAnalysisJobReview(ModelBuilder modelBuilder)
@@ -119,21 +121,14 @@ public class ProcessingDbContext : DbContext
             b.HasKey(x => x.Id);
 
             b.Property(x => x.Id).UseIdentityByDefaultColumn();
-            b.Property(x => x.FakeStatus).HasMaxLength(20);
-            b.Property(x => x.Sentiment).HasMaxLength(20);
+            b.Property(x => x.OverallSentiment).HasMaxLength(20);
             b.Property(x => x.ProcessedAt).HasDefaultValueSql("NOW()");
 
-            b.Property(x => x.FakeReasonTags)
+            b.Property(x => x.Aspects)
                 .HasColumnType("jsonb")
                 .HasDefaultValueSql("'[]'::jsonb")
-                .HasConversion(JsonStringConverter<List<string>>())
-                .Metadata.SetValueComparer(JsonStringComparer<List<string>>());
-
-            b.Property(x => x.Topics)
-                .HasColumnType("jsonb")
-                .HasDefaultValueSql("'[]'::jsonb")
-                .HasConversion(JsonStringConverter<List<string>>())
-                .Metadata.SetValueComparer(JsonStringComparer<List<string>>());
+                .HasConversion(JsonStringConverter<List<ReviewAspect>>())
+                .Metadata.SetValueComparer(JsonStringComparer<List<ReviewAspect>>());
 
             b.HasOne(x => x.Review)
                 .WithMany()
@@ -147,8 +142,35 @@ public class ProcessingDbContext : DbContext
                 .IsUnique()
                 .HasDatabaseName("ix_review_llm_results_review_job_unique");
 
-            // GIN-индекс по `topics` для фильтра «отзывы по теме» (см. ADR-002, ADR-003).
+            // GIN-индекс по `aspects` для фильтра «отзывы с темой X».
             // EF не умеет нативно описать GIN — добавляется в миграции вручную.
+        });
+    }
+
+    private static void ConfigureAnalysisRecommendation(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<AnalysisRecommendation>(b =>
+        {
+            b.ToTable("analysis_recommendations");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.Id).UseIdentityByDefaultColumn();
+            b.Property(x => x.Topic).HasMaxLength(200);
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("NOW()");
+
+            b.Property(x => x.Evidence)
+                .HasColumnType("jsonb")
+                .HasDefaultValueSql("'[]'::jsonb")
+                .HasConversion(JsonStringConverter<List<string>>())
+                .Metadata.SetValueComparer(JsonStringComparer<List<string>>());
+
+            b.HasOne(x => x.AnalysisJob)
+                .WithMany()
+                .HasForeignKey(x => x.AnalysisJobId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasIndex(x => new { x.AnalysisJobId, x.Priority, x.SortOrder })
+                .HasDatabaseName("ix_analysis_recommendations_job_priority");
         });
     }
 

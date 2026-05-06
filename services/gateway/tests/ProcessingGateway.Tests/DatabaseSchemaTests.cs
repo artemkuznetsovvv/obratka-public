@@ -17,7 +17,7 @@ public class DatabaseSchemaTests
     public DatabaseSchemaTests(PgFixture pg) => _pg = pg;
 
     [Fact]
-    public async Task Migration_creates_all_three_business_tables()
+    public async Task Migration_creates_all_business_tables()
     {
         await using var conn = new NpgsqlConnection(_pg.ConnectionString);
         await conn.OpenAsync();
@@ -25,12 +25,16 @@ public class DatabaseSchemaTests
         var tables = (await conn.QueryAsync<string>(@"
             SELECT tablename FROM pg_tables WHERE schemaname = 'public'")).ToHashSet();
 
-        tables.Should().Contain(new[] { "reviews", "review_llm_results", "analysis_jobs" });
+        tables.Should().Contain(new[]
+        {
+            "reviews", "review_llm_results", "analysis_jobs",
+            "analysis_job_reviews", "analysis_recommendations"
+        });
         tables.Should().Contain(new[] { "inbox_state", "outbox_state", "outbox_message" });
     }
 
     [Fact]
-    public async Task Gin_index_on_topics_exists()
+    public async Task Gin_index_on_aspects_exists()
     {
         await using var conn = new NpgsqlConnection(_pg.ConnectionString);
         await conn.OpenAsync();
@@ -38,11 +42,11 @@ public class DatabaseSchemaTests
         var indexDef = await conn.QuerySingleOrDefaultAsync<string>(@"
             SELECT indexdef FROM pg_indexes
             WHERE tablename = 'review_llm_results'
-              AND indexname = 'ix_review_llm_results_topics_gin'");
+              AND indexname = 'ix_review_llm_results_aspects_gin'");
 
         indexDef.Should().NotBeNull();
         indexDef.Should().Contain("USING gin");
-        indexDef.Should().Contain("(topics)");
+        indexDef.Should().Contain("(aspects)");
     }
 
     [Fact]
@@ -151,14 +155,14 @@ public class DatabaseSchemaTests
         ctx.ReviewLlmResults.Add(new ReviewLlmResult
         {
             ReviewId = review.Id, AnalysisJobId = jobId,
-            FakeStatus = "normal", IsSpam = false, SpamConfidence = 0.0
+            OverallSentiment = "позитивный", OverallConfidence = 0.9
         });
         await ctx.SaveChangesAsync();
 
         ctx.ReviewLlmResults.Add(new ReviewLlmResult
         {
             ReviewId = review.Id, AnalysisJobId = jobId,
-            FakeStatus = "fake", IsSpam = true, SpamConfidence = 1.0
+            OverallSentiment = "негативный", OverallConfidence = 0.5
         });
 
         var act = async () => await ctx.SaveChangesAsync();

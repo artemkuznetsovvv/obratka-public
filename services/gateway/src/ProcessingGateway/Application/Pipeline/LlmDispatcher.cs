@@ -13,7 +13,7 @@ namespace ProcessingGateway.Application.Pipeline;
 /// обеспечивает атомарность с обновлениями БД.
 public sealed class LlmDispatcher
 {
-    public const string CurrentSchemaVersion = "1.0";
+    public const string CurrentSchemaVersion = "2.0";
 
     private readonly ProcessingDbContext _db;
     private readonly IJobBlobStorage _blob;

@@ -1,8 +1,12 @@
 namespace ProcessingGateway.Domain;
 
-/// Корневая запись pipeline анализа. PK = uuid — это **внешний идентификатор**,
+/// Корневая запись pipeline анализа. PK = uuid — внешний идентификатор,
 /// протекает через API/брокер/ключи S3/CorrelationId.
 /// Поля и переходы статусов — ADR-004 §4 + CLAUDE.md (без `language_detection`).
+///
+/// Schema 2.0: `Recommendation` заменён на `Summary` + `RecommendationsCount`,
+/// один `ResultUrl` разбит на `ResultReviewsUrl` + `ResultSummaryUrl`. Детальные рекомендации
+/// живут в отдельной таблице `analysis_recommendations` (1:N к этой записи).
 public class AnalysisJob
 {
     public Guid Id { get; set; }
@@ -13,17 +17,23 @@ public class AnalysisJob
 
     public int ReviewCount { get; set; }
 
-    /// JSONB: source slug → entry. Обновляется ParserPoller на Этапе 5.
+    /// JSONB: source slug → entry. Обновляется ParserPoller.
     public Dictionary<string, CollectionProgressEntry> CollectionProgress { get; set; } = new();
 
     /// `s3://obratka-jobs/{id}/input.json` после публикации в LLM.
     public string? PayloadUrl { get; set; }
 
-    /// `s3://obratka-jobs/{id}/output.json` после получения ответа LLM.
-    public string? ResultUrl { get; set; }
+    /// `s3://obratka-jobs/{id}/output_reviews.json` после ответа LLM.
+    public string? ResultReviewsUrl { get; set; }
 
-    /// Job-level recommendation от LLM (НЕ per-review, ADR-004 §2).
-    public string? Recommendation { get; set; }
+    /// `s3://obratka-jobs/{id}/output_summary.json` после ответа LLM.
+    public string? ResultSummaryUrl { get; set; }
+
+    /// Краткое резюме (1–3 предложения) от LLM. Используется в PDF-отчёте Web API.
+    public string? Summary { get; set; }
+
+    /// Денормализация для UI/быстрых запросов: `len(AnalysisRecommendations WHERE job=this)`.
+    public int RecommendationsCount { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
 

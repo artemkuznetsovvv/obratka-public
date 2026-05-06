@@ -50,8 +50,11 @@ builder.Services.AddSingleton<IDbConnectionFactory, NpgsqlConnectionFactory>();
 // Bulk-INSERT отзывов из raw/{source}.json. Stateless через factory — singleton.
 builder.Services.AddSingleton<RawReviewBulkInserter>();
 
-// Bulk-INSERT LLM-результатов из output.json (Этап 6).
+// Bulk-INSERT per-review результатов из output_reviews.json (schema 2.0).
 builder.Services.AddSingleton<ReviewLlmResultBulkInserter>();
+
+// DELETE+INSERT job-level рекомендаций из output_summary.json (schema 2.0).
+builder.Services.AddSingleton<AnalysisRecommendationWriter>();
 
 // Связь job ↔ review. Вызывается после bulk-INSERT-а отзывов (ParserPoller).
 builder.Services.AddSingleton<JobReviewLinker>();
@@ -120,7 +123,9 @@ var rabbitPass = builder.Configuration["RabbitMq:Pass"] ?? "guest";
 builder.Services.AddMassTransit(x =>
 {
     x.AddConsumer<ProcessingGateway.Application.Consumers.StartAnalysisCommandConsumer>();
-    x.AddConsumer<ProcessingGateway.Application.Consumers.LlmResultMessageConsumer>();
+    x.AddConsumer<
+        ProcessingGateway.Application.Consumers.LlmResultMessageConsumer,
+        ProcessingGateway.Application.Consumers.LlmResultMessageConsumerDefinition>();
     x.AddConsumer<ProcessingGateway.Application.Consumers.AggregatesReadyEventConsumer>();
 
     x.AddEntityFrameworkOutbox<ProcessingDbContext>(o =>

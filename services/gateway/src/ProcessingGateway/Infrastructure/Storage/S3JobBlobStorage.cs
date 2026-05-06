@@ -15,10 +15,8 @@ public sealed class S3JobBlobStorage : IJobBlobStorage
         PropertyNameCaseInsensitive = true
     };
 
-    /// LlmInput / LlmOutput используют [JsonPropertyName(...)] атрибуты — naming policy не нужен.
-    /// `UnsafeRelaxedJsonEscaping` — чтобы кириллица в S3-файлах не выходила как \uXXXX.
-    /// Безопасно: эти JSON читаются JSON-парсерами (нашим и LLM-сервисом), не embedding-ом
-    /// в HTML/<script>.
+    /// LlmInput / LlmReviewsOutput / LlmSummaryOutput используют [JsonPropertyName(...)]
+    /// атрибуты — naming policy не нужен. `UnsafeRelaxedJsonEscaping` — кириллица как есть.
     private static readonly JsonSerializerOptions LlmJson = new()
     {
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
@@ -52,29 +50,37 @@ public sealed class S3JobBlobStorage : IJobBlobStorage
         var key = $"{jobId}/input.json";
         var json = JsonSerializer.Serialize(input, LlmJson);
 
-        var request = new PutObjectRequest
+        await _s3.PutObjectAsync(new PutObjectRequest
         {
             BucketName = _bucketName,
             Key = key,
             ContentBody = json,
             ContentType = "application/json"
-        };
+        }, ct);
 
-        await _s3.PutObjectAsync(request, ct);
         _logger.LogInformation(
             "Uploaded LLM input for job {AnalysisJobId} to s3://{Bucket}/{Key} ({ReviewCount} reviews)",
             jobId, _bucketName, key, input.Reviews.Count);
     }
 
-    public Task<LlmOutput> ReadOutputAsync(Guid jobId, CancellationToken ct = default)
-        => ReadJsonAsync<LlmOutput>(_bucketName, $"{jobId}/output.json", LlmJson, ct);
-
     public Task<LlmInput> ReadInputAsync(Guid jobId, CancellationToken ct = default)
         => ReadJsonAsync<LlmInput>(_bucketName, $"{jobId}/input.json", LlmJson, ct);
 
-    public async Task WriteOutputAsync(Guid jobId, LlmOutput output, CancellationToken ct = default)
+    public Task<LlmReviewsOutput> ReadReviewsOutputAsync(string s3Url, CancellationToken ct = default)
     {
-        var key = $"{jobId}/output.json";
+        var (bucket, key) = S3UrlParser.Parse(s3Url);
+        return ReadJsonAsync<LlmReviewsOutput>(bucket, key, LlmJson, ct);
+    }
+
+    public Task<LlmSummaryOutput> ReadSummaryOutputAsync(string s3Url, CancellationToken ct = default)
+    {
+        var (bucket, key) = S3UrlParser.Parse(s3Url);
+        return ReadJsonAsync<LlmSummaryOutput>(bucket, key, LlmJson, ct);
+    }
+
+    public async Task WriteReviewsOutputAsync(Guid jobId, LlmReviewsOutput output, CancellationToken ct = default)
+    {
+        var key = $"{jobId}/output_reviews.json";
         var json = JsonSerializer.Serialize(output, LlmJson);
 
         await _s3.PutObjectAsync(new PutObjectRequest
@@ -86,8 +92,26 @@ public sealed class S3JobBlobStorage : IJobBlobStorage
         }, ct);
 
         _logger.LogInformation(
-            "Uploaded LLM output for job {AnalysisJobId} to s3://{Bucket}/{Key} ({ProcessedCount} processed)",
-            jobId, _bucketName, key, output.ProcessedReview.Count);
+            "Uploaded LLM reviews-output for job {AnalysisJobId} to s3://{Bucket}/{Key} ({Count} reviews)",
+            jobId, _bucketName, key, output.Reviews.Count);
+    }
+
+    public async Task WriteSummaryOutputAsync(Guid jobId, LlmSummaryOutput output, CancellationToken ct = default)
+    {
+        var key = $"{jobId}/output_summary.json";
+        var json = JsonSerializer.Serialize(output, LlmJson);
+
+        await _s3.PutObjectAsync(new PutObjectRequest
+        {
+            BucketName = _bucketName,
+            Key = key,
+            ContentBody = json,
+            ContentType = "application/json"
+        }, ct);
+
+        _logger.LogInformation(
+            "Uploaded LLM summary-output for job {AnalysisJobId} to s3://{Bucket}/{Key} ({Recs} recommendations)",
+            jobId, _bucketName, key, output.RecommendationsCount);
     }
 
     private async Task<T> ReadJsonAsync<T>(string bucket, string key, JsonSerializerOptions options, CancellationToken ct)

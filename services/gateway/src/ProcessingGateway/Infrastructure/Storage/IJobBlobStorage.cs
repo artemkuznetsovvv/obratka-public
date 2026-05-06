@@ -3,10 +3,11 @@ using ProcessingGateway.Application.Llm;
 
 namespace ProcessingGateway.Infrastructure.Storage;
 
-/// Bucket `obratka-jobs` (ADR-001/004). Префиксы:
-///   {jobId}/raw/{source}.json   — пишет Parser, читаем мы
-///   {jobId}/input.json          — пишем мы, читает LLM
-///   {jobId}/output.json         — пишет LLM, читаем мы
+/// Bucket `obratka-jobs` (ADR-001/004, schema 2.0). Префиксы:
+///   {jobId}/raw/{source}.json        — пишет Parser, читаем мы
+///   {jobId}/input.json               — пишем мы, читает LLM
+///   {jobId}/output_reviews.json      — пишет LLM, читаем мы
+///   {jobId}/output_summary.json      — пишет LLM, читаем мы
 public interface IJobBlobStorage
 {
     /// Скачивает и десериализует `raw/{source}.json` от Parser-а.
@@ -19,14 +20,20 @@ public interface IJobBlobStorage
     /// Сериализует и заливает `input.json` для LLM.
     Task WriteInputAsync(Guid jobId, LlmInput input, CancellationToken ct = default);
 
-    /// Симметричное чтение `input.json` (нужно LLM-стубу и тестам).
+    /// Симметричное чтение `input.json` (нужно тестам).
     Task<LlmInput> ReadInputAsync(Guid jobId, CancellationToken ct = default);
 
-    /// Скачивает и десериализует `output.json` от LLM.
-    Task<LlmOutput> ReadOutputAsync(Guid jobId, CancellationToken ct = default);
+    /// Скачивает `output_reviews.json` (per-review aspects). Читает по полному `s3://` URL.
+    Task<LlmReviewsOutput> ReadReviewsOutputAsync(string s3Url, CancellationToken ct = default);
 
-    /// Симметричная запись `output.json` (нужно LLM-стубу).
-    Task WriteOutputAsync(Guid jobId, LlmOutput output, CancellationToken ct = default);
+    /// Скачивает `output_summary.json` (job-level recommendations). Читает по полному `s3://` URL.
+    Task<LlmSummaryOutput> ReadSummaryOutputAsync(string s3Url, CancellationToken ct = default);
+
+    /// Симметричная запись `output_reviews.json` (для тестов и QA-инжектов).
+    Task WriteReviewsOutputAsync(Guid jobId, LlmReviewsOutput output, CancellationToken ct = default);
+
+    /// Симметричная запись `output_summary.json` (для тестов и QA-инжектов).
+    Task WriteSummaryOutputAsync(Guid jobId, LlmSummaryOutput output, CancellationToken ct = default);
 }
 
 /// Парсинг `s3://bucket/key` в (bucket, key). Используется тестами и

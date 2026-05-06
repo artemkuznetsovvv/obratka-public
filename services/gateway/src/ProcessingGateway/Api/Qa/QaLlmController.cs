@@ -10,9 +10,9 @@ using ProcessingGateway.Infrastructure.Storage;
 
 namespace ProcessingGateway.Api.Qa;
 
-/// QA-эндпоинты для отладки LLM-стороны pipeline. Все 4 ручки нужны до прихода
-/// реального LLM (стуб + manual recovery), и `/timeout` останется полезным даже
-/// когда реализуем reconciler (Этап 7 отложен).
+/// QA-эндпоинты для отладки LLM-стороны pipeline (schema 2.0). 4 ручки нужны до прихода
+/// реального LLM (стуб + manual recovery), и `/timeout` останется полезным даже когда
+/// реализуем reconciler (Этап 7 отложен).
 [ApiController]
 [Route("api/qa/llm")]
 [RequireQaApiKey]
@@ -41,42 +41,50 @@ public sealed class QaLlmController : ControllerBase
         _logger = logger;
     }
 
-    /// Принять `LlmOutput` в теле, записать в S3 от имени PG и опубликовать
-    /// `LlmResultMessage{ status: finished, result_url: ... }`. Главный
-    /// инструмент отладки ингеста: позволяет тестировать произвольные ответы
-    /// LLM без зависимости от стуба.
+    /// Schema 2.0 inject: принимает **оба** output-файла в одном теле, записывает в S3,
+    /// публикует `LlmResultMessage(finished)` с обоими URL-ами. Главный инструмент отладки
+    /// ингеста без зависимости от стуба или реального LLM.
     [HttpPost("inject/{jobId:guid}")]
     public async Task<IActionResult> Inject(
         Guid jobId,
-        [FromBody] LlmOutput output,
+        [FromBody] InjectRequest body,
         CancellationToken ct)
     {
-        // Корректируем analysis_job_id чтобы клиенту не нужно было дублировать
-        // jobId в URL и в теле. Это удобство для curl-ручного использования.
-        if (output.AnalysisJobId != jobId)
-            output = output with { AnalysisJobId = jobId };
+        // Корректируем analysis_job_id чтобы клиенту не нужно было дублировать его в трёх местах.
+        var reviewsOutput = body.Reviews with { AnalysisJobId = jobId };
+        var summaryOutput = body.Summary with { AnalysisJobId = jobId };
 
-        await _blob.WriteOutputAsync(jobId, output, ct);
+        await _blob.WriteReviewsOutputAsync(jobId, reviewsOutput, ct);
+        await _blob.WriteSummaryOutputAsync(jobId, summaryOutput, ct);
 
         var bucket = _configuration["S3:BucketName"]!;
-        var resultUrl = $"s3://{bucket}/{jobId}/output.json";
+        var reviewsUrl = $"s3://{bucket}/{jobId}/output_reviews.json";
+        var summaryUrl = $"s3://{bucket}/{jobId}/output_summary.json";
 
         await _publisher.Publish(new LlmResultMessage(
             AnalysisJobId: jobId,
             Status: "finished",
-            ResultUrl: resultUrl,
-            SchemaVersion: output.SchemaVersion,
+            ResultReviewsUrl: reviewsUrl,
+            ResultSummaryUrl: summaryUrl,
+            SchemaVersion: reviewsOutput.SchemaVersion,
             Error: null), ct);
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
-            "QA inject: wrote output.json + published finished for {AnalysisJobId} ({ProcessedCount} processed)",
-            jobId, output.ProcessedReview.Count);
+            "QA inject: wrote outputs + published finished for {AnalysisJobId} " +
+            "({Reviews} reviews, {Recs} recommendations)",
+            jobId, reviewsOutput.Reviews.Count, summaryOutput.FullRecommendations.Count);
 
-        return Accepted(new { result_url = resultUrl, processed_count = output.ProcessedReview.Count });
+        return Accepted(new
+        {
+            result_reviews_url = reviewsUrl,
+            result_summary_url = summaryUrl,
+            reviews_count = reviewsOutput.Reviews.Count,
+            recommendations_count = summaryOutput.FullRecommendations.Count
+        });
     }
 
-    /// Опубликовать `LlmResultMessage{ status: failed }` для job-а (тест failure path).
+    /// Опубликовать `LlmResultMessage(failed)` для job-а (тест failure path).
     [HttpPost("fail/{jobId:guid}")]
     public async Task<IActionResult> Fail(
         Guid jobId,
@@ -86,7 +94,8 @@ public sealed class QaLlmController : ControllerBase
         var msg = new LlmResultMessage(
             AnalysisJobId: jobId,
             Status: "failed",
-            ResultUrl: null,
+            ResultReviewsUrl: null,
+            ResultSummaryUrl: null,
             SchemaVersion: LlmDispatcher.CurrentSchemaVersion,
             Error: error ?? "manual fail via QA");
 
@@ -97,9 +106,9 @@ public sealed class QaLlmController : ControllerBase
         return Accepted(new { published = "LlmResultMessage(failed)", error = msg.Error });
     }
 
-    /// Перечитать reviews job-а, перезаписать input.json и заново опубликовать
-    /// LLM-request. Идемпотентно: ингест итогового output отбросит дубль через
-    /// UNIQUE (review_id, analysis_job_id).
+    /// Перечитать reviews job-а, перезаписать input.json и заново опубликовать LLM-request.
+    /// Идемпотентно: ингест итоговых outputs отбросит дубль (UNIQUE review_id+analysis_job_id +
+    /// DELETE+INSERT для analysis_recommendations).
     [HttpPost("replay/{jobId:guid}")]
     public async Task<IActionResult> Replay(Guid jobId, CancellationToken ct)
     {
@@ -112,9 +121,7 @@ public sealed class QaLlmController : ControllerBase
         return Accepted(new { status = "re-dispatched" });
     }
 
-    /// Сдвинуть `analysis_jobs.sent_at` в прошлое. Заготовка для тестов будущего
-    /// LlmStatusReconciler (Этап 7) — он берёт jobs со `sent_at < NOW() - timeout`.
-    /// Сейчас просто помогает форсировать reconcile-сценарий вручную.
+    /// Сдвинуть `analysis_jobs.sent_at` в прошлое — заготовка под reconciler (Этап 7).
     [HttpPost("timeout/{jobId:guid}")]
     public async Task<IActionResult> Timeout(Guid jobId, CancellationToken ct)
     {
@@ -130,4 +137,7 @@ public sealed class QaLlmController : ControllerBase
             jobId, oldSentAt, job.SentAt);
         return Ok(new { previous_sent_at = oldSentAt, new_sent_at = job.SentAt });
     }
+
+    /// Тело для `POST /inject/{jobId}` — два output-файла в одном запросе.
+    public record InjectRequest(LlmReviewsOutput Reviews, LlmSummaryOutput Summary);
 }
