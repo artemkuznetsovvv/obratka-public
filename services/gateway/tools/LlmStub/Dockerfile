@@ -8,8 +8,9 @@ COPY . .
 WORKDIR /src/tools/LlmStub
 RUN dotnet publish -c Release -o /app/publish /p:UseAppHost=false
 
-# Runtime — без HTTP сервера, чисто worker.
-FROM mcr.microsoft.com/dotnet/runtime:9.0 AS final
+# Runtime: aspnet:9.0 (а не runtime:9.0) — стуб через ProjectReference на основной
+# web-проект тянет `Microsoft.AspNetCore.App` framework, поэтому нужен aspnet-runtime.
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS final
 WORKDIR /app
 COPY --from=build /app/publish .
 ENV DOTNET_ENVIRONMENT=Production

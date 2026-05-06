@@ -1,0 +1,62 @@
+# Override для локального запуска ВСЕГО стэка целиком: PG + Parser + MinIO + RabbitMQ
+# + Seq + Postgres + LLM-стуб. Parser билдится из соседней папки `../Parser-Service`.
+#
+# Перед запуском:
+#   1. Останови свой локальный Parser (dotnet run / IDE), иначе порт 8080 будет занят.
+#   2. Если хочешь работающий сбор — положи прокси в parser-config/appsettings.Production.json
+#      (см. секцию `volumes` ниже). Без прокси Parser поднимется, но скрейп будет падать
+#      на анти-боте (SmartCaptcha и т.д.) — это нормальный failure-path для проверки PG.
+#
+# Запуск:
+#   docker compose -f docker-compose.yml -f docker-compose.full.yml up -d --build
+#
+# Доступы (всё на localhost):
+#   - PG:           http://localhost:8081  (X-Api-Key: dev-gateway-api-key)
+#   - Parser:       http://localhost:8080
+#   - MinIO API:    http://localhost:9000  (minioadmin / minioadmin)
+#   - MinIO UI:     http://localhost:9001
+#   - RabbitMQ UI:  http://localhost:15672 (gateway / gateway_pwd)
+#   - Seq UI:       http://localhost:5342  (без логина)
+#
+# Остановить:
+#   docker compose -f docker-compose.yml -f docker-compose.full.yml down       # сохранит volumes
+#   docker compose -f docker-compose.yml -f docker-compose.full.yml down -v    # снесёт всё (БД, MinIO, Seq, SQLite парсера)
+
+services:
+  parser:
+    build:
+      context: ../Parser-Service
+      dockerfile: src/ParserService/Dockerfile
+    image: parser-service:dev
+    ports:
+      - "8080:8080"
+    environment:
+      # Production — обязательно: в Development Parser регистрирует LocalFileResultStorage
+      # вместо S3ResultStorage и пишет результаты в /app/results/... вместо MinIO.
+      # Иначе PG не может прочесть файл из S3 — не тот URL-формат.
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: "http://+:8080"
+      ConnectionStrings__TasksDb: "Data Source=/data/tasks.db"
+      S3__Endpoint: "http://minio:9000"
+      S3__AccessKey: "minioadmin"
+      S3__SecretKey: "minioadmin"
+      S3__BucketName: "obratka-jobs"
+      Browser__Headless: "true"
+      # Parser-овский ключ для его QA-ручек (/qa/* и /api/proxies). НЕ путать с
+      # `Gateway:ApiKey` у нашего PG — это разные сервисы, разные ключи.
+      Qa__ApiKey: "dev-parser-api-key"
+    volumes:
+      - parser-data:/data
+      # Dev-override Parser-конфига (опционально):
+      #   1. cp parser-config/appsettings.Development.json.example \
+      #          parser-config/appsettings.Development.json
+      #   2. раскомментировать строку ниже
+      #   3. опционально подложить туда прокси
+      # Без override-а Parser использует свои defaults (10-30s inter-org delay, 15 orgs/hour).
+      # - ./parser-config/appsettings.Development.json:/app/appsettings.Development.json:ro
+    depends_on:
+      minio:
+        condition: service_healthy
+
+volumes:
+  parser-data:

@@ -10,9 +10,21 @@
     <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="9.0.0" />
     <PackageReference Include="AWSSDK.S3" Version="4.0.22.2" />
     <PackageReference Include="Dapper" Version="2.1.72" />
+    <!--
+      EF Core: явный pin до 9.0.* нужен, потому что AspNetCore.HealthChecks.NpgSql 9.0.0
+      и MassTransit.EntityFrameworkCore тянут более старый EF (9.0.1), что даёт
+      package downgrade error на dotnet publish (на VS-build видно как warning MSB3277).
+    -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.*" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.*" />
     <PackageReference Include="EFCore.NamingConventions" Version="9.0.*" />
-    <PackageReference Include="MassTransit.EntityFrameworkCore" Version="9.1.0" />
-    <PackageReference Include="MassTransit.RabbitMQ" Version="9.1.0" />
+    <!--
+      MassTransit 9.x с 2025 г. требует коммерческую лицензию (MT_LICENSE).
+      Откат на последнюю бесплатную 8.x — API совместим, breaking changes в нашей
+      кодовой базе нет. Если когда-то купим лицензию — апнем обратно на 9.x.
+    -->
+    <PackageReference Include="MassTransit.EntityFrameworkCore" Version="8.*" />
+    <PackageReference Include="MassTransit.RabbitMQ" Version="8.*" />
     <PackageReference Include="Microsoft.AspNetCore.Diagnostics.HealthChecks" Version="2.2.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.*">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

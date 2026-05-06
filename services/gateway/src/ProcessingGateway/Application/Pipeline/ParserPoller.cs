@@ -149,11 +149,12 @@ public sealed class ParserPoller : BackgroundService
             {
                 case "pending":
                 case "running":
-                    // 0..1 у Parser-а → 0..100 для UI (см. CLAUDE.md HTTP Status API).
+                    // Parser отдаёт progress уже в процентах 0..100 (фактический контракт,
+                    // несмотря на ADR-001 §5 где было заявлено 0..1). Без re-scale.
                     progress[source] = entry with
                     {
                         Status = status.Status,
-                        Progress = (int)Math.Round(status.Progress * 100)
+                        Progress = (int)Math.Round(status.Progress)
                     };
                     break;
 

@@ -16,7 +16,7 @@ services:
       # реальные вызовы пойдут с Этапа 5+ либо когда Parser-стенд будет в той же сети.
       Parser__BaseUrl: "http://parser:8080"
       Parser__PollIntervalSeconds: "4"
-      Parser__TaskTimeoutMinutes: "90"
+      Parser__TaskTimeoutMinutes: "10"
       S3__Endpoint: "http://minio:9000"
       S3__AccessKey: "minioadmin"
       S3__SecretKey: "minioadmin"
@@ -67,6 +67,11 @@ services:
       POSTGRES_DB: processing
       POSTGRES_USER: processing_user
       POSTGRES_PASSWORD: processing_pwd
+    ports:
+      # Локально пробрасываем 5433:5432 — чтобы не конфликтовать с системным Postgres
+      # на 5432 (если есть). Подключение из DBeaver/psql на localhost:5433.
+      # На VPS этот порт не пробрасывается — БД доступна только из docker-сети.
+      - "5433:5432"
     volumes:
       - processing-db-data:/var/lib/postgresql/data
       - ./init:/docker-entrypoint-initdb.d:ro

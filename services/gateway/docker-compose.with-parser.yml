@@ -1,0 +1,53 @@
+# Override для локального запуска вместе с уже поднятым Parser-Service.
+#
+# Предполагаемое состояние:
+#   - В соседней папке `Parser-Service` запущен `docker compose up`.
+#   - У Parser-а живут `parser-service:8080` и `minio:9000` (порт 9000 на хосте занят).
+#
+# Этот override:
+#   - Выключает наш MinIO (через "scale: 0", чтобы не конфликтовать по порту 9000).
+#   - Перекидывает PG и LLM-стуб на MinIO Parser-а через `host.docker.internal`.
+#   - Указывает Parser__BaseUrl на Parser-сервис того же хоста.
+#
+# Запуск:
+#   docker compose -f docker-compose.yml -f docker-compose.with-parser.yml up -d --build
+#
+# Остановить только наш стэк (Parser-стэк не трогаем):
+#   docker compose -f docker-compose.yml -f docker-compose.with-parser.yml down
+
+services:
+  processing-gateway:
+    environment:
+      Parser__BaseUrl: "http://host.docker.internal:8080"
+      S3__Endpoint: "http://host.docker.internal:9000"
+      S3__AccessKey: "minioadmin"
+      S3__SecretKey: "minioadmin"
+    extra_hosts:
+      # Linux Docker (без Docker Desktop) не имеет host.docker.internal — добавляем явно.
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      seq:
+        condition: service_started
+      processing-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      # minio убран из depends — он отключен этим override.
+
+  llm-stub:
+    environment:
+      S3__Endpoint: "http://host.docker.internal:9000"
+      S3__AccessKey: "minioadmin"
+      S3__SecretKey: "minioadmin"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  # Полностью выключаем наш MinIO и init-контейнер — bucket уже создан Parser-овским init-ом.
+  minio:
+    profiles: ["unused"]
+
+  minio-init:
+    profiles: ["unused"]

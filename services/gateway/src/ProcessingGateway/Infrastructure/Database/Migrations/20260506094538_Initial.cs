@@ -66,8 +66,7 @@ namespace ProcessingGateway.Infrastructure.Database.Migrations
                     row_version = table.Column<byte[]>(type: "bytea", rowVersion: true, nullable: true),
                     created = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
                     delivered = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    last_sequence_number = table.Column<long>(type: "bigint", nullable: true),
-                    bus_name = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: true)
+                    last_sequence_number = table.Column<long>(type: "bigint", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -142,6 +141,24 @@ namespace ProcessingGateway.Infrastructure.Database.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "analysis_job_reviews",
+                columns: table => new
+                {
+                    analysis_job_id = table.Column<Guid>(type: "uuid", nullable: false),
+                    review_id = table.Column<long>(type: "bigint", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("pk_analysis_job_reviews", x => new { x.analysis_job_id, x.review_id });
+                    table.ForeignKey(
+                        name: "fk_analysis_job_reviews_reviews_review_id",
+                        column: x => x.review_id,
+                        principalTable: "reviews",
+                        principalColumn: "id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "review_llm_results",
                 columns: table => new
                 {
@@ -170,6 +187,11 @@ namespace ProcessingGateway.Infrastructure.Database.Migrations
                 });
 
             migrationBuilder.CreateIndex(
+                name: "ix_analysis_job_reviews_review",
+                table: "analysis_job_reviews",
+                column: "review_id");
+
+            migrationBuilder.CreateIndex(
                 name: "ix_inbox_state_delivered",
                 table: "inbox_state",
                 column: "delivered");
@@ -195,11 +217,6 @@ namespace ProcessingGateway.Infrastructure.Database.Migrations
                 table: "outbox_message",
                 columns: new[] { "outbox_id", "sequence_number" },
                 unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "ix_outbox_state_bus_name_created",
-                table: "outbox_state",
-                columns: new[] { "bus_name", "created" });
 
             migrationBuilder.CreateIndex(
                 name: "ix_outbox_state_created",
@@ -236,15 +253,15 @@ namespace ProcessingGateway.Infrastructure.Database.Migrations
                 unique: true,
                 filter: "external_id IS NOT NULL");
 
-            // GIN-индекс по `topics` — для фильтра дашборда «отзывы по теме» (ADR-002, ADR-003).
+            // GIN-индекс по `topics` (фильтр дашборда «отзывы по теме», ADR-002/003).
             // EF не умеет нативно описать GIN, добавляется raw SQL-ом.
             migrationBuilder.Sql(
                 "CREATE INDEX ix_review_llm_results_topics_gin ON review_llm_results USING GIN (topics);");
 
-            // GRANT SELECT для analytics_reader на 3 бизнес-таблицы (ADR-011 §«MVP trade-off»).
-            // Outbox/Inbox-таблицы ему не доступны — это операционный канал MassTransit.
-            // Роль создаётся init-скриптом Postgres (init/01-analytics-reader.sql), либо вручную
-            // на VPS. DO-блок — чтобы миграция не падала, если роль ещё не создана.
+            // GRANT SELECT для analytics_reader (Web API Analytics-модуль, ADR-011).
+            // Outbox/Inbox-таблицы ему не выдаём — это операционный канал MassTransit.
+            // DO-блок защищает от падения, если роли ещё нет (init-скрипт Postgres
+            // её создаёт; на Testcontainers БД роль не создаётся → миграция пропускает GRANT).
             migrationBuilder.Sql(@"
                 DO $$
                 BEGIN
@@ -252,6 +269,7 @@ namespace ProcessingGateway.Infrastructure.Database.Migrations
                         GRANT SELECT ON reviews TO analytics_reader;
                         GRANT SELECT ON review_llm_results TO analytics_reader;
                         GRANT SELECT ON analysis_jobs TO analytics_reader;
+                        GRANT SELECT ON analysis_job_reviews TO analytics_reader;
                     END IF;
                 END $$;
             ");
@@ -261,6 +279,9 @@ namespace ProcessingGateway.Infrastructure.Database.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.Sql("DROP INDEX IF EXISTS ix_review_llm_results_topics_gin;");
+
+            migrationBuilder.DropTable(
+                name: "analysis_job_reviews");
 
             migrationBuilder.DropTable(
                 name: "analysis_jobs");

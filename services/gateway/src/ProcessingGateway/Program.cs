@@ -154,16 +154,9 @@ builder.Services.AddMassTransit(x =>
     });
 });
 
-// Healthchecks: минимальный self-check — процесс жив, DI собран. Дотошные пробы
-// (Postgres / S3 / RabbitMQ / Parser) переедут в `/api/qa/health/dependencies` на Этапе 8.
-//
-// Раньше здесь был AddNpgSql(...) на readiness, но он триггерит DI graph во время
-// MapHealthChecks → конфликтует с MassTransit EF Outbox-регистрацией DbContext.
-// В .NET 9 без проб MapHealthChecks возвращает 503 (изменилось поведение vs .NET 8) —
-// поэтому добавляем dummy "self".
-builder.Services.AddHealthChecks()
-    .AddCheck("self", () => Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult.Healthy(),
-        tags: new[] { "ready", "live" });
+// `AddHealthChecks()` намеренно НЕ зарегистрирован — health endpoints внизу — это
+// `app.MapGet` мимо DI/health-infrastructure. Расширенная диагностика —
+// в `/api/qa/health/dependencies` (QaDiagnosticsController).
 
 var app = builder.Build();
 
@@ -178,21 +171,16 @@ using (var scope = app.Services.CreateScope())
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseSerilogRequestLogging();
 
-// Health endpoints. Оба без проб (`Predicate = _ => false`) — гарантированно 200,
-// если процесс жив. Реальная диагностика зависимостей (Postgres / RabbitMQ / S3 /
-// Parser) переедет в `/api/qa/health/dependencies` на Этапе 8.
+// Health endpoints — голые `app.MapGet`, ВНЕ health-check-infrastructure ASP.NET Core.
+// MapHealthChecks(...) в .NET 9 при построении endpoint-а проходит по всем
+// HealthCheckRegistration через DI; MassTransit регистрирует свой bus-health, чей
+// constructor зависит от scoped IBusInstance → host падает на старте в Docker
+// (`MapHealthChecksCore` не может разрешить service graph).
 //
-// Почему не подключаем зависимостные пробы здесь: в .NET 9 MapHealthChecks при
-// построении endpoint-a проходится по всем registered HealthCheckRegistration через
-// DI graph. MassTransit регистрирует свой bus-health-check, у которого constructor
-// зависит от scoped IBusInstance — и это валит startup в integration-сценариях с
-// реальным RabbitMQ. Чистое решение — изолировать health от DI до Этапа 8.
-var noProbe = new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
-{
-    Predicate = _ => false
-};
-app.MapHealthChecks("/health/live", noProbe);
-app.MapHealthChecks("/health/ready", noProbe);
+// Реальная диагностика зависимостей (Postgres / RabbitMQ / S3 / Parser) — в QA
+// `/api/qa/health/dependencies` (Этап 8).
+app.MapGet("/health/live", () => Results.Ok(new { status = "alive" }));
+app.MapGet("/health/ready", () => Results.Ok(new { status = "ready" }));
 
 app.MapControllers();
 

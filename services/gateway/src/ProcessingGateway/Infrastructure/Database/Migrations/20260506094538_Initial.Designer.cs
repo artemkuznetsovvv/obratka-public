@@ -12,8 +12,8 @@ using ProcessingGateway.Infrastructure.Database;
 namespace ProcessingGateway.Infrastructure.Database.Migrations
 {
     [DbContext(typeof(ProcessingDbContext))]
-    [Migration("20260505144637_AnalysisJobReviews")]
-    partial class AnalysisJobReviews
+    [Migration("20260506094538_Initial")]
+    partial class Initial
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -212,11 +212,6 @@ namespace ProcessingGateway.Infrastructure.Database.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("outbox_id");
 
-                    b.Property<string>("BusName")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("bus_name");
-
                     b.Property<DateTime>("Created")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created");
@@ -244,9 +239,6 @@ namespace ProcessingGateway.Infrastructure.Database.Migrations
 
                     b.HasIndex("Created")
                         .HasDatabaseName("ix_outbox_state_created");
-
-                    b.HasIndex("BusName", "Created")
-                        .HasDatabaseName("ix_outbox_state_bus_name_created");
 
                     b.ToTable("outbox_state", (string)null);
                 });

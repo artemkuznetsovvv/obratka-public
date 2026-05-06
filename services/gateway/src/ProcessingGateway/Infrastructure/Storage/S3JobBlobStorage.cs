@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Amazon.S3;
 using Amazon.S3.Model;
@@ -15,10 +16,14 @@ public sealed class S3JobBlobStorage : IJobBlobStorage
     };
 
     /// LlmInput / LlmOutput используют [JsonPropertyName(...)] атрибуты — naming policy не нужен.
+    /// `UnsafeRelaxedJsonEscaping` — чтобы кириллица в S3-файлах не выходила как \uXXXX.
+    /// Безопасно: эти JSON читаются JSON-парсерами (нашим и LLM-сервисом), не embedding-ом
+    /// в HTML/<script>.
     private static readonly JsonSerializerOptions LlmJson = new()
     {
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-        WriteIndented = false
+        WriteIndented = false,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
     private readonly IAmazonS3 _s3;
