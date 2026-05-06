@@ -15,11 +15,24 @@ public sealed class S3JobBlobStorage : IJobBlobStorage
         PropertyNameCaseInsensitive = true
     };
 
-    /// LlmInput / LlmReviewsOutput / LlmSummaryOutput используют [JsonPropertyName(...)]
-    /// атрибуты — naming policy не нужен. `UnsafeRelaxedJsonEscaping` — кириллица как есть.
+    /// Для чтения output-файлов LLM и output-stub-ов: WhenWritingNull чтобы при сериализации
+    /// (если когда-нибудь будем писать output из PG-стороны) лишние null-поля не плодились.
+    /// Для чтения это поле не релевантно.
     private static readonly JsonSerializerOptions LlmJson = new()
     {
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = false,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
+    /// Для записи `input.json`: nullable-поля (`stars`, `text_language`) **всегда**
+    /// сериализуются — даже как `null`. Иначе LLM-сервис интерпретирует отсутствие поля
+    /// как «обязательное поле пропущено» и валидирует input как невалидный
+    /// (см. LLM_PYTHON_QUICKSTART.md §3 — `stars: int?` обозначен как опциональный,
+    /// но валидатор по дефолту проверяет наличие ключа). Решение — слать ключ всегда.
+    private static readonly JsonSerializerOptions LlmInputJson = new()
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never,
         WriteIndented = false,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
@@ -48,7 +61,9 @@ public sealed class S3JobBlobStorage : IJobBlobStorage
     public async Task WriteInputAsync(Guid jobId, LlmInput input, CancellationToken ct = default)
     {
         var key = $"{jobId}/input.json";
-        var json = JsonSerializer.Serialize(input, LlmJson);
+        // LlmInputJson (Never) — чтобы stars=null / text_language=null писались как ключи,
+        // а не выпадали из JSON и не ломали валидатор LLM-сервиса.
+        var json = JsonSerializer.Serialize(input, LlmInputJson);
 
         await _s3.PutObjectAsync(new PutObjectRequest
         {
