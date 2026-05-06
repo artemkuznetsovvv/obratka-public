@@ -14,6 +14,11 @@ namespace ProcessingGateway.Application.Pipeline;
 ///
 /// Идемпотентен: повторное применение одного и того же output.json безопасно (UNIQUE
 /// review_id+analysis_job_id + проверка статуса перед переходом).
+///
+/// Методы `IngestFinishedAsync` / `IngestFailedAsync` намеренно публичные и не
+/// привязаны к источнику триггера — сейчас вызываются из `LlmResultMessageConsumer`
+/// (брокер), в будущем тот же путь использует `LlmStatusReconciler` (REST-fallback,
+/// Этап 7 отложен — см. IMPLEMENTATION_PLAN.md).
 public sealed class LlmResultIngestor
 {
     private readonly ProcessingDbContext _db;

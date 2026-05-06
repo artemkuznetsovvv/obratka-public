@@ -63,7 +63,7 @@ ProcessingGateway/
 │   │   ├── StartMonitoringCycleCommandConsumer.cs
 │   │   ├── AggregatesReadyEventConsumer.cs       ← финализирует analysis_jobs.status
 │   │   └── LlmResultMessageConsumer.cs           ← внешний контракт LLM
-│   └── Reconciliation/
+│   └── Reconciliation/                  ← (future, Этап 7 отложен)
 │       └── LlmStatusReconciler.cs        ← REST fallback к LLM при таймауте
 │
 ├── Domain/
@@ -407,12 +407,18 @@ LLM — чёрный ящик, наш контракт. Транспорт — R
 - каждый элемент `processedReview` → строка `review_llm_results` (UNIQUE `(review_id, analysis_job_id)`,
   `ON CONFLICT DO NOTHING` для идемпотентности повторного consume).
 
-### Reconciliation (ADR-004 §4)
+### Reconciliation (ADR-004 §4) — **отложено** (см. IMPLEMENTATION_PLAN.md Этап 7)
 
-Если ответа нет за `Llm__ResultTimeoutMinutes` — PG поллит `Llm__StatusBaseUrl/{jobId}`
-(REST). Возможные ответы LLM: `processing` / `finished` / `failed`. На `finished` — читаем
-указанный `result_url` и проходим обычный путь ингеста; на `failed` → `failed` + Telegram-алерт
-через `AnalysisCompletedEvent { status = failed }`.
+> На MVP **не реализовано**. Полагаемся на брокер-канал (RabbitMQ durable + persistent
+> + MassTransit at-least-once). Ручное восстановление зависших job-ов — через QA-ручки
+> Этапа 8 (`POST /api/qa/llm/replay/{jobId}`).
+
+Когда понадобится: фоновый сервис каждые N сек берёт jobs со
+`status='sent_to_llm' AND sent_at < NOW() - Llm__ResultTimeoutMinutes` и поллит
+`Llm__StatusBaseUrl/{jobId}` (REST). Возможные ответы LLM: `processing` / `finished` /
+`failed`. На `finished` — читаем указанный `result_url` и проходим обычный путь ингеста
+(`LlmResultIngestor.IngestFinishedAsync` готов); на `failed` → `IngestFailedAsync`.
+ENV-переменные `Llm__StatusBaseUrl` и `Llm__ResultTimeoutMinutes` уже резервированы.
 
 ---
 
@@ -530,7 +536,7 @@ Live-мониторинг идёт по тому же пути, но с `dateFro
 | Parser-таск зависает > `Parser__TaskTimeoutMinutes` | помечаем источник `failed(reason=timeout)`, изоляция как выше |
 | S3 недоступен на upload `input.json` | MassTransit retry с экспоненциальным backoff; при исчерпании → status='failed' |
 | LLM не забрал из очереди | RabbitMQ держит сообщение; status остаётся `sent_to_llm` |
-| Ответа LLM нет за `Llm__ResultTimeoutMinutes` | reconciliation через REST `Llm__StatusBaseUrl` |
+| Ответа LLM нет за `Llm__ResultTimeoutMinutes` | **MVP**: ручное восстановление через QA `POST /api/qa/llm/replay/{jobId}` (Этап 8). **Future**: автоматический reconciliation REST `Llm__StatusBaseUrl` — отложено, см. IMPLEMENTATION_PLAN.md Этап 7 |
 | LLM вернул `failed` | status='failed', publish AnalysisCompletedEvent(failed) → Notifications уведомляет админа |
 | Дубликат LLM-ответа | `ON CONFLICT (review_id, analysis_job_id) DO NOTHING` + idempotent статус-переходы |
 

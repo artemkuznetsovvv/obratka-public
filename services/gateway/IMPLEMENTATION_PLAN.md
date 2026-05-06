@@ -253,23 +253,52 @@ sent_to_llm`, в S3 лежит корректный `input.json` с `review_id`-
 
 ---
 
-## Этап 7. LLM Reconciliation (REST fallback)
+## Этап 7. LLM Reconciliation (REST fallback) — **DEFERRED**
 
-**Цель:** если ответа из брокера нет за `Llm__ResultTimeoutMinutes` — поллить REST `/status/{jobId}`.
+> **Статус: отложен до prod-инцидента.** Решение принято после Этапа 6.
 
-1. `Application/Reconciliation/LlmStatusReconciler` — фоновая задача (`IHostedService`).
-   Раз в N секунд берёт jobs со `status='sent_to_llm' AND sent_at < NOW() - timeout`.
-2. HTTP GET `Llm__StatusBaseUrl/{analysisJobId}` → `{ status: processing|finished|failed,
-   result_url? }`.
-3. `finished` — выполнить тот же путь, что `LlmResultMessageConsumer`.
-4. `failed` — `status='failed'`, error.
-5. `processing` — обновить `last_reconciled_at`, ничего не делать.
-6. Учитывать, что реальный LLM-сервис ещё не зафиксирован → выделить в `IExternalLlmStatusClient`
-   с интерфейсом, чтобы стуб подменялся.
+**Что отложено**
+
+Background-сервис, который ловит «зависшие» в `sent_to_llm` jobs и спрашивает LLM
+по REST `/status/{jobId}`, если ответа из брокера нет за timeout. См. ADR-004 §4.
+
+**Почему отложили**
+
+- На MVP канал брокера достаточен: MassTransit + RabbitMQ durable queues + persistent
+  messages дают at-least-once. Потеря сообщения — реальный, но редкий сценарий, не
+  оправдывающий ~3 часа работы прямо сейчас.
+- LLM-сервиса ещё нет — реальный `/status/{jobId}` строить не на чем; пришлось бы
+  тестировать только против стуба, что снижает ценность.
+- Manual recovery через QA-ручки Этапа 8 (`POST /api/qa/llm/replay/{jobId}` +
+  `POST /api/qa/llm/timeout/{jobId}`) даёт человеческий путь восстановления зависших
+  job-ов на dev-стенде.
+
+**Триггеры для возврата** (хоть один — реализуем):
+
+- Первый prod-инцидент с зависшим в `sent_to_llm` jobом
+- Подключение реального внешнего LLM-сервиса с известным uptime ниже нашего
+- Появление SLO «PG не должен показывать «идёт анализ» дольше N минут»
+
+**Что нужно будет сделать** (карта на ~3 часа когда понадобится):
+
+1. `Application/Reconciliation/LlmStatusReconciler` — `BackgroundService`. Раз в N сек:
+   `SELECT jobs WHERE status='sent_to_llm' AND sent_at < NOW() - timeout`.
+2. HTTP GET `Llm__StatusBaseUrl/{analysisJobId}` → `{ status: processing|finished|failed, result_url? }`.
+3. `finished` → тот же путь, что `LlmResultMessageConsumer` (через существующий `LlmResultIngestor`).
+4. `failed` → `LlmResultIngestor.IngestFailedAsync`.
+5. `processing` → обновить `last_reconciled_at` (доп. колонка в `analysis_jobs`), ничего не делать.
+6. `IExternalLlmStatusClient` интерфейс, чтобы стуб подменялся (стубу добавить
+   minimal HTTP-эндпоинт `/status/{jobId}` — если `output.json` в S3 → `finished`,
+   иначе → `processing`).
 7. Тесты: эмулировать «брокер молчит, REST отвечает finished» через WireMock.
 
-**Готово, когда:** интеграционный тест: брокер выключен, через таймаут reconciler находит и
-завершает job по REST.
+**Что есть уже** (готовая база для возврата):
+
+- `LlmResultIngestor.IngestFinishedAsync` / `IngestFailedAsync` — идемпотентны, готовы
+  принимать триггер из любого источника (брокер или reconciler).
+- ENV-переменная `Llm__ResultTimeoutMinutes` уже зарезервирована в плане Этапа 11.
+- QA-ручки `/api/qa/llm/timeout/{jobId}` (сдвиг `sent_at`) и `/api/qa/llm/replay/{jobId}`
+  планируются на Этапе 8 — они станут отладочным интерфейсом для будущего reconciler-а.
 
 ---
 
