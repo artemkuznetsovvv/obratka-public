@@ -578,3 +578,10 @@ PG со своей стороны делает `INSERT ... ON CONFLICT DO NOTHIN
 - [ ] Проверить REST: `curl http://llm-service:8000/status/<jobId>` отдаёт корректный stage
 - [ ] Подключить реальную LLM-модель (заменить `llm_analyze_reviews` / `llm_build_summary`)
 - [ ] Persistent job-state — для production (на MVP можно оставить in-memory, но при рестарте status теряется)
+
+---
+
+## Связанные документы PG-стороны
+
+- `CLAUDE.md` — общая архитектура PG
+- `test-cases.md` §2.2 — как QA запускают анализ для тестирования pipeline
