@@ -21,6 +21,10 @@ public class CollectionTaskOrchestrator
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
+    /// Время на финальное bookkeeping (S3 upload + SQLite update) ПОСЛЕ возможной отмены
+    /// внешнего ct. Должно превышать ожидаемое время S3 upload + одного DB write.
+    private static readonly TimeSpan BookkeepingTimeout = TimeSpan.FromSeconds(30);
+
     public CollectionTaskOrchestrator(
         ITaskRepository repository,
         IS3ResultStorage s3,
@@ -88,6 +92,13 @@ public class CollectionTaskOrchestrator
         return task.Id;
     }
 
+    /// Выполнение задачи сбора. Принципы:
+    ///   - Сбор отзывов через плагин использует `ct` (внешняя отмена → стоп).
+    ///   - Финальное bookkeeping (запись в S3 + статус-апдейт в SQLite) идёт с независимым
+    ///     токеном (timeout, не привязан к внешнему ct), чтобы при graceful-shutdown / SIGTERM
+    ///     не терять уже собранные данные.
+    ///   - Inter-org delay из `ReleaseOrgSlotAsync` не должен валить весь job — оборачиваем в
+    ///     try/catch и логируем как warning.
     public async Task ExecuteCollectionAsync(Guid taskId, CancellationToken ct)
     {
         var task = await _repository.GetByIdAsync(taskId, ct);
@@ -101,6 +112,9 @@ public class CollectionTaskOrchestrator
         task.Progress = 0;
         await _repository.UpdateAsync(task, ct);
 
+        var allReviews = new List<RawReview>();
+        Exception? collectionError = null;
+
         try
         {
             var plugin = _plugins.FirstOrDefault(p => p.Source == task.Source)
@@ -109,8 +123,6 @@ public class CollectionTaskOrchestrator
 
             var branches = JsonSerializer.Deserialize<List<BranchTargetDto>>(
                 task.BranchesJson, BranchJsonOptions) ?? [];
-
-            var allReviews = new List<RawReview>();
 
             for (var i = 0; i < branches.Count; i++)
             {
@@ -132,37 +144,94 @@ public class CollectionTaskOrchestrator
                 }
                 finally
                 {
-                    await _rateLimiter.ReleaseOrgSlotAsync(task.Source, ct);
+                    // Inter-org delay не должен валить весь job. Если ct отменён или delay
+                    // чем-то ломается — это не критично, продолжаем к bookkeeping.
+                    try
+                    {
+                        await _rateLimiter.ReleaseOrgSlotAsync(task.Source, ct);
+                    }
+                    catch (Exception releaseEx)
+                    {
+                        _logger.LogWarning(releaseEx,
+                            "ReleaseOrgSlot failed for task {TaskId} (non-fatal, continuing)", taskId);
+                    }
                 }
             }
-
-            var result = new CollectionResult(
-                task.Id,
-                task.JobId,
-                task.Source.ToSlug(),
-                task.CompanyId,
-                DateTimeOffset.UtcNow,
-                allReviews);
-
-            var s3Url = await _s3.UploadResultAsync(result, ct);
-
-            task.Status = CollectionTaskStatus.Completed;
-            task.S3Url = s3Url;
-            task.Progress = 100;
-            task.ReviewCount = allReviews.Count;
-            await _repository.UpdateAsync(task, ct);
-
-            _logger.LogInformation(
-                "Task {TaskId} completed: {ReviewCount} reviews uploaded to {S3Url}",
-                taskId, allReviews.Count, s3Url);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Task {TaskId} failed", taskId);
+            _logger.LogError(ex,
+                "Task {TaskId} collection failed (collected {Count} reviews so far)",
+                taskId, allReviews.Count);
+            collectionError = ex;
+        }
 
-            task.Status = CollectionTaskStatus.Failed;
-            task.Error = ex.Message;
-            await _repository.UpdateAsync(task, ct);
+        // Bookkeeping с независимым токеном — не теряем данные при отмене внешнего ct.
+        // Если внешний ct отменён, у нас всё ещё есть BookkeepingTimeout на финализацию.
+        using var bookkeepingCts = new CancellationTokenSource(BookkeepingTimeout);
+        var bk = bookkeepingCts.Token;
+
+        if (allReviews.Count > 0)
+        {
+            try
+            {
+                var result = new CollectionResult(
+                    task.Id,
+                    task.JobId,
+                    task.Source.ToSlug(),
+                    task.CompanyId,
+                    DateTimeOffset.UtcNow,
+                    allReviews);
+
+                var s3Url = await _s3.UploadResultAsync(result, bk);
+
+                // Если был collectionError — это частичный сбор: данные сохранены, но статус failed.
+                // Если ошибки не было — completed.
+                task.Status = collectionError is null
+                    ? CollectionTaskStatus.Completed
+                    : CollectionTaskStatus.Failed;
+                task.S3Url = s3Url;
+                task.Progress = 100;
+                task.ReviewCount = allReviews.Count;
+                task.Error = collectionError?.Message;
+                await _repository.UpdateAsync(task, bk);
+
+                _logger.LogInformation(
+                    "Task {TaskId} bookkeeping done: status={Status}, {ReviewCount} reviews → {S3Url}",
+                    taskId, task.Status, allReviews.Count, s3Url);
+            }
+            catch (Exception bookkeepingEx)
+            {
+                _logger.LogError(bookkeepingEx,
+                    "Bookkeeping FAILED for task {TaskId} after collecting {Count} reviews — data may be lost",
+                    taskId, allReviews.Count);
+
+                // Last-ditch: помечаем таску failed, чтобы она не висела в running.
+                try
+                {
+                    task.Status = CollectionTaskStatus.Failed;
+                    task.Error = $"Bookkeeping failed: {bookkeepingEx.Message}";
+                    await _repository.UpdateAsync(task, CancellationToken.None);
+                }
+                catch (Exception finalEx)
+                {
+                    _logger.LogError(finalEx, "Final UpdateAsync also failed for task {TaskId}", taskId);
+                }
+            }
+        }
+        else
+        {
+            // Ничего не собрали — обычный failure path.
+            try
+            {
+                task.Status = CollectionTaskStatus.Failed;
+                task.Error = collectionError?.Message ?? "No reviews collected";
+                await _repository.UpdateAsync(task, bk);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Final UpdateAsync failed for task {TaskId}", taskId);
+            }
         }
     }
 }

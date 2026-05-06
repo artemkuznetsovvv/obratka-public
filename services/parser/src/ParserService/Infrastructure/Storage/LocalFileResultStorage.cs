@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using ParserService.Core.Models;
 
@@ -11,7 +12,9 @@ public class LocalFileResultStorage : IS3ResultStorage
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-        WriteIndented = true
+        WriteIndented = true,
+        // Кириллица/эмодзи без \uXXXX-эскейпинга. См. комментарий в S3ResultStorage.
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
     public LocalFileResultStorage(IConfiguration configuration, ILogger<LocalFileResultStorage> logger)

@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Amazon.S3;
 using Amazon.S3.Model;
@@ -16,7 +17,12 @@ public class S3ResultStorage : IS3ResultStorage
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-        WriteIndented = false
+        WriteIndented = false,
+        // По умолчанию System.Text.Json escape-ит non-ASCII (кириллица, эмодзи) в \uXXXX.
+        // JSON валидный и десериализуется обратно корректно, но читать в S3 неприятно.
+        // UnsafeRelaxedJsonEscaping выпускает UTF-8 как есть. «Unsafe» — про XSS при выводе
+        // в HTML/JavaScript; для S3-файла, который читается JSON-парсером, безопасно.
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
     public S3ResultStorage(IAmazonS3 s3, IConfiguration configuration, ILogger<S3ResultStorage> logger)
