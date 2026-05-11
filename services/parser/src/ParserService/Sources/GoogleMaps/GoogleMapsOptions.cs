@@ -33,9 +33,11 @@ public class GoogleMapsOptions
     public int MaxRetries { get; set; } = 3;
 
     /// <summary>
-    /// Maximum scroll iterations before stopping.
+    /// Maximum scroll iterations before stopping. Должно быть ощутимо больше чем
+    /// (ожидаемое число отзывов / PageSize) — пустые скроллы (дубли, медленный API) тоже
+    /// расходуют слот, так что для 1500 отзывов при PageSize=10 нужно ~200+, а не ровно 150.
     /// </summary>
-    public int MaxScrollAttempts { get; set; } = 150;
+    public int MaxScrollAttempts { get; set; } = 300;
 
     public int NavigationTimeoutMs { get; set; } = 60_000;
 }

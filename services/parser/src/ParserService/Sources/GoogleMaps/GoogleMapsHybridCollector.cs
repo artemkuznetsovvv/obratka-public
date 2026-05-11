@@ -32,6 +32,12 @@ internal sealed class GoogleMapsHybridCollector
         var seenIds = new HashSet<string>();
         var interceptedBatch = new ConcurrentQueue<IReadOnlyList<GoogleMapsReviewDto>>();
 
+        // Объявлены здесь, а не в try — чтобы итоговый лог в finally имел к ним доступ
+        // (даже при exception видим, сколько успели собрать).
+        int totalDuplicates = 0;
+        int totalBatches = 0;
+        int finalAttempt = 0;
+
         var page = await browserContext.NewPageAsync();
         try
         {
@@ -75,14 +81,17 @@ internal sealed class GoogleMapsHybridCollector
             // --- Scroll loop ---
             int consecutiveEmpty = 0;
             const int maxConsecutiveEmpty = 5;
-            int totalDuplicates = initial.Duplicates;
-            int totalBatches = initial.BatchesProcessed;
+            const int heartbeatEvery = 10;
+            totalDuplicates = initial.Duplicates;
+            totalBatches = initial.BatchesProcessed;
             int lastScrollHeight = 0;
             int scrollHeightStuckStreak = 0;
+            bool plateauReported = false;
 
             for (int attempt = 0; attempt < _options.MaxScrollAttempts && !reachedDateBound; attempt++)
             {
                 ct.ThrowIfCancellationRequested();
+                finalAttempt = attempt + 1;
 
                 var beforeCount = reviews.Count;
 
@@ -92,8 +101,15 @@ internal sealed class GoogleMapsHybridCollector
                 if (!scroll.Found)
                     _logger.LogWarning("[GMaps-Hybrid] Скролл #{N}: scroll-контейнер не найден!", attempt + 1);
 
-                // Wait for intercepted response
-                var waitDeadline = DateTime.UtcNow.AddMilliseconds(_options.DelayBetweenPagesMaxMs * 2);
+                // Adaptive wait: при плато (предыдущий скролл был пустой ИЛИ scrollHeight застрял)
+                // нет смысла ждать 10 сек ответа — скорее всего его не будет. Обычный listugcposts
+                // отвечает за 100-500 мс, 2 сек — комфортный запас. Если данные всё-таки прилетят,
+                // на следующем скролле счётчики плато сбросятся и waitDeadline вернётся к 10 сек.
+                bool inPlateau = consecutiveEmpty > 0 || scrollHeightStuckStreak > 0;
+                int waitMs = inPlateau
+                    ? Math.Max(2000, _options.DelayBetweenPagesMinMs)
+                    : _options.DelayBetweenPagesMaxMs * 2;
+                var waitDeadline = DateTime.UtcNow.AddMilliseconds(waitMs);
                 while (interceptedBatch.IsEmpty && DateTime.UtcNow < waitDeadline)
                     await Task.Delay(300, ct);
 
@@ -145,6 +161,43 @@ internal sealed class GoogleMapsHybridCollector
                     scrollHeightStuckStreak = 0;
                 lastScrollHeight = scroll.ScrollHeight;
 
+                // Двойной сигнал плато: оба счётчика дошли до 3 одновременно — это сильный
+                // сигнал «всё», выходим раньше индивидуальных порогов 5+5. Экономит ~30 сек
+                // в финале сбора, не рискуя пропустить «медленный» ответ Google
+                // (для этого работают раздельные пороги ниже).
+                const int combinedStopThreshold = 3;
+                if (consecutiveEmpty >= combinedStopThreshold && scrollHeightStuckStreak >= combinedStopThreshold)
+                {
+                    _logger.LogInformation(
+                        "[GMaps-Hybrid] Двойной сигнал плато (пустых: {Empty}, scrollHeight stuck: {Stuck}) на скролле #{N} — Google закончил отдавать. Стоп.",
+                        consecutiveEmpty, scrollHeightStuckStreak, attempt + 1);
+                    break;
+                }
+
+                // Информативность: первый плато scrollHeight подряд логируем сразу на Information,
+                // чтобы было видно момент когда Google перестал расширять страницу.
+                if (scroll.Found && scrollHeightStuckStreak == 1 && !plateauReported)
+                {
+                    _logger.LogInformation(
+                        "[GMaps-Hybrid] scrollHeight={SH} перестал расти на скролле #{N} (всего {Total} отзывов). " +
+                        "Если останется так 5 скроллов подряд при 0 новых — выходим.",
+                        scroll.ScrollHeight, attempt + 1, reviews.Count);
+                    plateauReported = true;
+                }
+                if (scrollHeightStuckStreak == 0)
+                    plateauReported = false; // scrollHeight снова двинулся — можно отчитаться о следующем плато
+
+                // Heartbeat на Information каждые N скроллов — чтобы в проде был виден прогресс.
+                if ((attempt + 1) % heartbeatEvery == 0)
+                {
+                    _logger.LogInformation(
+                        "[GMaps-Hybrid] Прогресс: скролл {N}/{Max}, отзывов {Total}, дублей {Dup}, scroll {SH}/{ST}, в DOM {Dom}, plato={Stuck}",
+                        attempt + 1, _options.MaxScrollAttempts,
+                        reviews.Count, totalDuplicates,
+                        scroll.ScrollHeight, scroll.ScrollTop, scroll.ReviewCountInDom,
+                        scrollHeightStuckStreak);
+                }
+
                 if (scrollHeightStuckStreak >= 5 && newReviews == 0)
                 {
                     _logger.LogInformation(
@@ -154,14 +207,39 @@ internal sealed class GoogleMapsHybridCollector
                 }
             }
 
-            _logger.LogInformation(
-                "[GMaps-Hybrid] Сбор завершён: {ExternalId}, {Count} отзывов (уникальных: {Unique}), батчей: {Batches}, дублей отброшено: {Dup}",
-                branch.ExternalId, reviews.Count, seenIds.Count, totalBatches, totalDuplicates);
+            // Warning если вышли по лимиту скроллов — раньше это происходило молча, и было
+            // не отличить «дособрал всё» от «упёрся в потолок и остановился на полпути».
+            if (finalAttempt >= _options.MaxScrollAttempts)
+            {
+                _logger.LogWarning(
+                    "[GMaps-Hybrid] MaxScrollAttempts={Max} достигнут — лимит скроллов исчерпан, возможно недосбор. " +
+                    "Подними MaxScrollAttempts в конфиге, если у этого места реально много отзывов.",
+                    _options.MaxScrollAttempts);
+            }
 
             return reviews;
         }
+        catch (OperationCanceledException)
+        {
+            // Внешняя отмена (HTTP request abort от nginx/клиента, или явный cts.Cancel()).
+            // Логируем сколько успели собрать и пробрасываем дальше — чтобы оркестратор/контроллер
+            // могли корректно отреагировать. Без этого лога пользователь видит «таймаут» и
+            // ничего не понимает: успех частичный, или вообще ничего не собралось?
+            _logger.LogWarning(
+                "[GMaps-Hybrid] Отменено снаружи (ct=cancelled) на скролле #{N} для {ExternalId}: успели собрать {Count} отзывов",
+                finalAttempt, branch.ExternalId, reviews.Count);
+            throw;
+        }
         finally
         {
+            // Итоговый лог в finally — пишется ВСЕГДА: при успехе, при OCE, при любом другом
+            // исключении. Раньше «Сбор завершён» был внутри try после цикла и при exception
+            // не выполнялся → пользователь не видел сколько собралось.
+            _logger.LogInformation(
+                "[GMaps-Hybrid] Итог сбора: {ExternalId}, {Count} отзывов (уникальных: {Unique}), батчей: {Batches}, дублей отброшено: {Dup}, скроллов: {Scrolls}/{MaxScrolls}",
+                branch.ExternalId, reviews.Count, seenIds.Count, totalBatches, totalDuplicates,
+                finalAttempt, _options.MaxScrollAttempts);
+
             await page.CloseAsync();
         }
     }
