@@ -65,14 +65,20 @@ internal sealed class GoogleMapsHybridCollector
 
             // --- Process initial intercepted responses ---
             await Task.Delay(Random.Shared.Next(1000, 2000), ct);
-            var reachedDateBound = DrainQueue(interceptedBatch, reviews, seenIds, branch, period);
+            var initial = DrainQueue(interceptedBatch, reviews, seenIds, branch, period);
+            var reachedDateBound = initial.ReachedDateBound;
 
-            _logger.LogInformation("[GMaps-Hybrid] Первая порция: {Count} отзывов, дата-граница: {DateBound}",
-                reviews.Count, reachedDateBound);
+            _logger.LogInformation(
+                "[GMaps-Hybrid] Первая порция: батчей={Batches}, всего видели={Seen}, добавлено={Added}, дубли={Dup}, дата-граница: {DateBound}",
+                initial.BatchesProcessed, initial.TotalSeen, initial.Added, initial.Duplicates, reachedDateBound);
 
             // --- Scroll loop ---
             int consecutiveEmpty = 0;
             const int maxConsecutiveEmpty = 5;
+            int totalDuplicates = initial.Duplicates;
+            int totalBatches = initial.BatchesProcessed;
+            int lastScrollHeight = 0;
+            int scrollHeightStuckStreak = 0;
 
             for (int attempt = 0; attempt < _options.MaxScrollAttempts && !reachedDateBound; attempt++)
             {
@@ -81,7 +87,10 @@ internal sealed class GoogleMapsHybridCollector
                 var beforeCount = reviews.Count;
 
                 // Scroll down to trigger next page load
-                await ScrollReviewsPanelAsync(page);
+                var scroll = await ScrollReviewsPanelAsync(page);
+
+                if (!scroll.Found)
+                    _logger.LogWarning("[GMaps-Hybrid] Скролл #{N}: scroll-контейнер не найден!", attempt + 1);
 
                 // Wait for intercepted response
                 var waitDeadline = DateTime.UtcNow.AddMilliseconds(_options.DelayBetweenPagesMaxMs * 2);
@@ -93,33 +102,61 @@ internal sealed class GoogleMapsHybridCollector
                     _options.DelayBetweenPagesMinMs,
                     _options.DelayBetweenPagesMaxMs + 1), ct);
 
-                reachedDateBound = DrainQueue(interceptedBatch, reviews, seenIds, branch, period);
+                var stats = DrainQueue(interceptedBatch, reviews, seenIds, branch, period);
+                reachedDateBound = stats.ReachedDateBound;
+                totalDuplicates += stats.Duplicates;
+                totalBatches += stats.BatchesProcessed;
 
                 var newReviews = reviews.Count - beforeCount;
                 if (newReviews == 0)
                 {
                     consecutiveEmpty++;
-                    _logger.LogDebug("[GMaps-Hybrid] Скролл #{N}: нет новых (пустых: {Streak}/{Max})",
-                        attempt + 1, consecutiveEmpty, maxConsecutiveEmpty);
+                    _logger.LogDebug(
+                        "[GMaps-Hybrid] Скролл #{N}: нет новых (пустых: {Streak}/{Max}). batches={B}, видели={S}, дубли={D}, scroll={SH}/{ST}/{CH}, в DOM={Dom}",
+                        attempt + 1, consecutiveEmpty, maxConsecutiveEmpty,
+                        stats.BatchesProcessed, stats.TotalSeen, stats.Duplicates,
+                        scroll.ScrollHeight, scroll.ScrollTop, scroll.ClientHeight, scroll.ReviewCountInDom);
 
                     if (consecutiveEmpty >= maxConsecutiveEmpty)
                     {
-                        _logger.LogInformation("[GMaps-Hybrid] {Max} пустых скроллов — останавливаюсь",
-                            maxConsecutiveEmpty);
+                        _logger.LogInformation(
+                            "[GMaps-Hybrid] {Max} пустых скроллов подряд — останавливаюсь. Всего: батчей={Batches}, дублей={Dup}, отзывов={Total}, scrollHeight={SH}, в DOM={Dom}",
+                            maxConsecutiveEmpty, totalBatches, totalDuplicates, reviews.Count,
+                            scroll.ScrollHeight, scroll.ReviewCountInDom);
                         break;
                     }
                 }
                 else
                 {
                     consecutiveEmpty = 0;
-                    _logger.LogDebug("[GMaps-Hybrid] Скролл #{N}: +{New}, всего {Total}",
-                        attempt + 1, newReviews, reviews.Count);
+                    _logger.LogDebug(
+                        "[GMaps-Hybrid] Скролл #{N}: +{New}, всего {Total} (batches={B}, дубли={D}, scroll={SH}/{ST}, в DOM={Dom})",
+                        attempt + 1, newReviews, reviews.Count,
+                        stats.BatchesProcessed, stats.Duplicates,
+                        scroll.ScrollHeight, scroll.ScrollTop, scroll.ReviewCountInDom);
+                }
+
+                // Дополнительный сигнал «всё, больше не подгружается»: scrollHeight не меняется
+                // 5 раз подряд — Google перестал отдавать новые страницы (даже если в очереди
+                // что-то приходит). Полезно когда дубли маскируют пустые скроллы как «новые=0».
+                if (scroll.Found && scroll.ScrollHeight == lastScrollHeight)
+                    scrollHeightStuckStreak++;
+                else
+                    scrollHeightStuckStreak = 0;
+                lastScrollHeight = scroll.ScrollHeight;
+
+                if (scrollHeightStuckStreak >= 5 && newReviews == 0)
+                {
+                    _logger.LogInformation(
+                        "[GMaps-Hybrid] scrollHeight={SH} не растёт 5 скроллов подряд — Google больше не подгружает. Стоп.",
+                        scroll.ScrollHeight);
+                    break;
                 }
             }
 
             _logger.LogInformation(
-                "[GMaps-Hybrid] Сбор завершён: {ExternalId}, {Count} отзывов, уникальных: {Unique}",
-                branch.ExternalId, reviews.Count, seenIds.Count);
+                "[GMaps-Hybrid] Сбор завершён: {ExternalId}, {Count} отзывов (уникальных: {Unique}), батчей: {Batches}, дублей отброшено: {Dup}",
+                branch.ExternalId, reviews.Count, seenIds.Count, totalBatches, totalDuplicates);
 
             return reviews;
         }
@@ -153,7 +190,7 @@ internal sealed class GoogleMapsHybridCollector
         }
     }
 
-    private bool DrainQueue(
+    private DrainStats DrainQueue(
         ConcurrentQueue<IReadOnlyList<GoogleMapsReviewDto>> queue,
         List<RawReview> reviews,
         HashSet<string> seenIds,
@@ -161,26 +198,41 @@ internal sealed class GoogleMapsHybridCollector
         DateRange period)
     {
         bool reachedDateBound = false;
+        int batchesProcessed = 0, totalSeen = 0, dropDup = 0, dropEmpty = 0, dropOutOfRange = 0, added = 0;
 
         while (queue.TryDequeue(out var batch))
         {
+            batchesProcessed++;
             foreach (var dto in batch)
             {
+                totalSeen++;
+
                 if (string.IsNullOrEmpty(dto.ReviewId) || dto.Rating == null || dto.Date == null)
+                {
+                    dropEmpty++;
                     continue;
+                }
 
                 if (!seenIds.Add(dto.ReviewId))
+                {
+                    dropDup++;
                     continue;
+                }
 
                 if (dto.Date < period.From)
                 {
                     reachedDateBound = true;
+                    dropOutOfRange++;
                     continue;
                 }
 
                 if (dto.Date > period.To)
+                {
+                    dropOutOfRange++;
                     continue;
+                }
 
+                added++;
                 reviews.Add(new RawReview(
                     ExternalId: dto.ReviewId,
                     Text: dto.Text ?? "",
@@ -193,8 +245,17 @@ internal sealed class GoogleMapsHybridCollector
             }
         }
 
-        return reachedDateBound;
+        return new DrainStats(reachedDateBound, batchesProcessed, totalSeen, added, dropDup, dropEmpty, dropOutOfRange);
     }
+
+    private record DrainStats(
+        bool ReachedDateBound,
+        int BatchesProcessed,
+        int TotalSeen,
+        int Added,
+        int Duplicates,
+        int Empty,
+        int OutOfRange);
 
     private async Task ClickReviewsTabAsync(IPage page, CancellationToken ct)
     {
@@ -254,28 +315,67 @@ internal sealed class GoogleMapsHybridCollector
 
     private async Task SelectSortByNewestAsync(IPage page, CancellationToken ct)
     {
-        var sortClicked = await page.EvaluateAsync<bool>("""
+        // ВАЖНО: у Google sort-кнопка имеет aria-haspopup="true" (НЕ "listbox" — старый код
+        // искал именно listbox и всегда промахивался). Идентифицируется по тексту = названию
+        // текущей сортировки. Класс HQzyZ обфусцирован и нестабилен — на него не опираемся.
+        // Ловим уже выбранную "Сначала новые" / "Newest" — если так, ничего не делаем.
+        var sortResult = await page.EvaluateAsync<string>("""
             () => {
-                const btn = document.querySelector('button[aria-haspopup="listbox"]');
-                if (btn) { btn.click(); return true; }
-                return false;
+                const candidates = Array.from(document.querySelectorAll('button[aria-haspopup]'));
+                const sortNames = [
+                    'Самые релевантные', 'Сначала новые', 'Лучшие', 'По новизне',
+                    'Most relevant', 'Newest', 'Highest rating', 'Lowest rating'
+                ];
+                const newestNames = ['Сначала новые', 'По новизне', 'Newest'];
+
+                const sortBtn = candidates.find(b => {
+                    const text = (b.textContent || '').trim();
+                    const aria = b.getAttribute('aria-label') || '';
+                    return sortNames.some(n => text === n || aria === n);
+                });
+
+                if (!sortBtn) return 'NOT_FOUND';
+
+                const currentText = (sortBtn.textContent || '').trim();
+                if (newestNames.some(n => currentText === n)) return 'ALREADY_NEWEST';
+
+                sortBtn.click();
+                return 'OPENED';
             }
         """);
 
-        if (!sortClicked)
+        if (sortResult == "ALREADY_NEWEST")
         {
-            _logger.LogWarning("[GMaps-Hybrid] Не удалось найти dropdown сортировки");
+            _logger.LogDebug("[GMaps-Hybrid] Сортировка уже 'Сначала новые', пропускаю");
             return;
         }
 
+        if (sortResult == "NOT_FOUND")
+        {
+            // Дамп всех haspopup-кнопок для диагностики — увидим, что Google отдал.
+            var dump = await page.EvaluateAsync<string>("""
+                () => JSON.stringify(
+                    Array.from(document.querySelectorAll('button[aria-haspopup]')).map(b => ({
+                        aria_label: b.getAttribute('aria-label'),
+                        aria_haspopup: b.getAttribute('aria-haspopup'),
+                        text: (b.textContent || '').trim().slice(0, 80)
+                    }))
+                )
+            """);
+            _logger.LogWarning("[GMaps-Hybrid] Не нашёл sort dropdown. button[aria-haspopup] кандидаты: {Dump}", dump);
+            return;
+        }
+
+        _logger.LogDebug("[GMaps-Hybrid] Sort dropdown открыт");
         await Task.Delay(Random.Shared.Next(500, 1000), ct);
 
         var optionClicked = await page.EvaluateAsync<bool>("""
             () => {
-                const items = document.querySelectorAll('[role="menuitemradio"]');
+                // Опции могут быть [role="menuitemradio"], [role="menuitem"] или <li>
+                const items = document.querySelectorAll('[role="menuitemradio"], [role="menuitem"], [role="option"]');
                 for (const item of items) {
-                    const text = item.textContent || '';
-                    if (text.includes('новые') || text.includes('Newest')) {
+                    const text = (item.textContent || '').trim();
+                    if (text === 'Сначала новые' || text === 'По новизне' || text === 'Newest') {
                         item.click();
                         return true;
                     }
@@ -285,34 +385,84 @@ internal sealed class GoogleMapsHybridCollector
         """);
 
         if (optionClicked)
-            _logger.LogDebug("[GMaps-Hybrid] Сортировка 'Сначала новые' выбрана");
+        {
+            _logger.LogInformation("[GMaps-Hybrid] Сортировка 'Сначала новые' выбрана");
+            await Task.Delay(Random.Shared.Next(2000, 3000), ct);
+        }
         else
-            _logger.LogWarning("[GMaps-Hybrid] Не удалось выбрать 'Сначала новые'");
-
-        await Task.Delay(Random.Shared.Next(2000, 3000), ct);
+        {
+            var menuDump = await page.EvaluateAsync<string>("""
+                () => {
+                    const items = document.querySelectorAll('[role="menuitemradio"], [role="menuitem"], [role="option"]');
+                    return JSON.stringify(Array.from(items).map(i => ({
+                        role: i.getAttribute('role'),
+                        text: (i.textContent || '').trim().slice(0, 80)
+                    })));
+                }
+            """);
+            _logger.LogWarning("[GMaps-Hybrid] Не выбрал 'Сначала новые'. Найденные опции в открытом меню: {Dump}", menuDump);
+        }
     }
 
-    private async Task ScrollReviewsPanelAsync(IPage page)
+    private async Task<ScrollMetrics> ScrollReviewsPanelAsync(IPage page)
     {
-        await page.EvaluateAsync("""
+        // Контейнер ищем по факту: overflow-y: auto/scroll + есть [data-review-id] дети.
+        // Хардкод классов (.m6QErb.DxyBCb) ненадёжен — на странице несколько .m6QErb с разными
+        // комбинациями доп-классов, querySelector мог брать не тот.
+        var json = await page.EvaluateAsync<string>("""
             async () => {
-                const c = document.querySelector('[role="main"] .m6QErb.DxyBCb')
-                    || document.querySelector('.m6QErb.DxyBCb')
-                    || document.querySelector('.m6QErb');
-                if (!c) return;
+                const findScroller = () => {
+                    const all = document.querySelectorAll('*');
+                    for (const el of all) {
+                        const ovy = getComputedStyle(el).overflowY;
+                        if (ovy !== 'auto' && ovy !== 'scroll') continue;
+                        if (el.scrollHeight <= el.clientHeight) continue;
+                        if (el.querySelector('[data-review-id]')) return el;
+                    }
+                    // Fallback на старый селектор, если по overflow не нашли (например, до клика на tab)
+                    return document.querySelector('.m6QErb.DxyBCb') || document.querySelector('.m6QErb');
+                };
 
+                const c = findScroller();
+                if (!c) return JSON.stringify({ found: false });
+
+                const before = { sh: c.scrollHeight, st: c.scrollTop, ch: c.clientHeight };
                 const target = c.scrollHeight;
-                const current = c.scrollTop;
-                const distance = target - current;
-                if (distance <= 0) return;
-
-                const steps = 3 + Math.floor(Math.random() * 4);
-                for (let i = 1; i <= steps; i++) {
-                    const progress = 1 - Math.pow(1 - i / steps, 2);
-                    c.scrollTop = current + distance * progress;
-                    await new Promise(r => setTimeout(r, 80 + Math.random() * 120));
+                const distance = target - c.scrollTop;
+                if (distance > 0) {
+                    const steps = 3 + Math.floor(Math.random() * 4);
+                    for (let i = 1; i <= steps; i++) {
+                        const progress = 1 - Math.pow(1 - i / steps, 2);
+                        c.scrollTop = c.scrollHeight - c.clientHeight; // всегда в конец
+                        await new Promise(r => setTimeout(r, 80 + Math.random() * 120));
+                    }
                 }
+                const after = { sh: c.scrollHeight, st: c.scrollTop, ch: c.clientHeight };
+                const reviewCount = c.querySelectorAll('[data-review-id]').length;
+                return JSON.stringify({ found: true, before, after, reviewCount });
             }
         """);
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (!root.GetProperty("found").GetBoolean())
+                return new ScrollMetrics(false, 0, 0, 0, 0);
+
+            var after = root.GetProperty("after");
+            return new ScrollMetrics(
+                Found: true,
+                ScrollHeight: after.GetProperty("sh").GetInt32(),
+                ScrollTop: after.GetProperty("st").GetInt32(),
+                ClientHeight: after.GetProperty("ch").GetInt32(),
+                ReviewCountInDom: root.GetProperty("reviewCount").GetInt32());
+        }
+        catch
+        {
+            return new ScrollMetrics(false, 0, 0, 0, 0);
+        }
     }
+
+    private record ScrollMetrics(bool Found, int ScrollHeight, int ScrollTop, int ClientHeight, int ReviewCountInDom);
 }
