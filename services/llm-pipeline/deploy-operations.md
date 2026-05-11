@@ -58,9 +58,16 @@ rsync -avz --delete \
     --exclude='build.log' --exclude='llm_response.json' --exclude='input*.json' \
     --exclude='.env' --exclude='.env.worker' \
     --exclude='/docker-compose.yml' \
-    --exclude='CLAUDE.md' --exclude='/*.md' --exclude='tasks' \
+    --include='/README.md' --exclude='/CLAUDE.md' --exclude='/*.md' \
+    --exclude='tasks' \
     ./ deploy@193.233.217.223:~/llm-pipeline/app/
 ```
+
+> **Важно про порядок `--include`/`--exclude` для `.md`-файлов:** rsync применяет фильтры
+> по принципу «первое совпадение побеждает». `--include='/README.md'` должен идти
+> **перед** `--exclude='/*.md'`, иначе README отлетит вместе с остальными markdown'ами.
+> README **обязателен** для билда — в `pyproject.toml` он объявлен как `readme = "README.md"`,
+> и `poetry install` без него падает на шаге `COPY README.md`.
 
 Что значат флаги:
 - `-a` — archive: рекурсивно, сохраняет права, симлинки, timestamps
