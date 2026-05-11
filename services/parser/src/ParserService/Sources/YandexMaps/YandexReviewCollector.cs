@@ -18,7 +18,7 @@ internal sealed class YandexReviewCollector
         _logger = logger;
     }
 
-    public async Task<IReadOnlyList<RawReview>> CollectAllReviewsAsync(
+    public async Task<YandexCollectionOutcome> CollectAllReviewsAsync(
         YandexSession session,
         BranchTarget branch,
         DateRange period,
@@ -41,17 +41,25 @@ internal sealed class YandexReviewCollector
         _logger.LogDebug("[ApiCollector] Фаза 2: сортировка by_relevance_org...");
         var byRelevance = await CollectWithSortingAsync(session, branch, period, "by_relevance_org", stopOnDate: false, ct);
 
-        var deduplicated = DeduplicateReviews(byTime, byRelevance);
+        var deduplicated = DeduplicateReviews(byTime.Reviews, byRelevance.Reviews);
 
         _logger.LogInformation(
             "[ApiCollector] Итого для {BusinessId}: {Total} уникальных ({ByTime} by_time + {ByRelevance} by_relevance, {Dupes} дубликатов убрано)",
-            branch.ExternalId, deduplicated.Count, byTime.Count, byRelevance.Count,
-            byTime.Count + byRelevance.Count - deduplicated.Count);
+            branch.ExternalId, deduplicated.Count, byTime.Reviews.Count, byRelevance.Reviews.Count,
+            byTime.Reviews.Count + byRelevance.Reviews.Count - deduplicated.Count);
 
-        return deduplicated;
+        // hasMore=true в любом из проходов означает, что Яндекс отдавал ещё страницы, но мы
+        // упёрлись в MaxPages — это нормальный случай для полного сбора 600+ отзывов.
+        // Если оба прохода вернули hasMore=false и при этом мало отзывов — значит Яндекс реально
+        // отдал всё (либо тихо отфильтровал по IP). Сигнал hasMore=false на верхнем уровне
+        // означает "ретраить бесполезно".
+        return new YandexCollectionOutcome(
+            deduplicated,
+            HasMore: byTime.HasMore || byRelevance.HasMore,
+            ReachedDateBound: false);
     }
 
-    private async Task<IReadOnlyList<RawReview>> CollectWithSortingAsync(
+    private async Task<YandexCollectionOutcome> CollectWithSortingAsync(
         YandexSession session,
         BranchTarget branch,
         DateRange period,
@@ -60,6 +68,8 @@ internal sealed class YandexReviewCollector
         CancellationToken ct)
     {
         var reviews = new List<RawReview>();
+        bool finalHasMore = false;
+        bool finalReachedDateBound = false;
 
         _logger.LogDebug("[ApiCollector] Начинаю пагинацию ({Ranking}), макс. страниц: {MaxPages}, размер: {PageSize}",
             ranking, _options.MaxPages, _options.PageSize);
@@ -138,14 +148,19 @@ internal sealed class YandexReviewCollector
             if (reachedDateBound)
             {
                 _logger.LogInformation("[ApiCollector] Дата-граница достигнута на стр. {Page} ({Ranking}) — останавливаюсь", page, ranking);
+                finalReachedDateBound = true;
                 break;
             }
 
             if (response.HasMore != true)
             {
                 _logger.LogDebug("[ApiCollector] hasMore=false на стр. {Page} ({Ranking}) — больше страниц нет", page, ranking);
+                finalHasMore = false;
                 break;
             }
+
+            // Если это последняя итерация — Яндекс ещё мог отдать страницы (hasMore=true), но мы упёрлись в MaxPages.
+            finalHasMore = true;
 
             // Delay between pages
             var delay = Random.Shared.Next(_options.DelayBetweenPagesMinMs, _options.DelayBetweenPagesMaxMs + 1);
@@ -153,8 +168,9 @@ internal sealed class YandexReviewCollector
             await Task.Delay(delay, ct);
         }
 
-        _logger.LogInformation("[ApiCollector] Сортировка {Ranking}: собрано {Count} отзывов", ranking, reviews.Count);
-        return reviews;
+        _logger.LogInformation("[ApiCollector] Сортировка {Ranking}: собрано {Count} отзывов (hasMore={HasMore}, reachedDateBound={DateBound})",
+            ranking, reviews.Count, finalHasMore, finalReachedDateBound);
+        return new YandexCollectionOutcome(reviews, finalHasMore, finalReachedDateBound);
     }
 
     private static List<RawReview> DeduplicateReviews(

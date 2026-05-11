@@ -44,6 +44,10 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
     private static readonly StealthProfile[] ProfileRotation =
         [StealthProfile.Moderate, StealthProfile.Minimal, StealthProfile.Full];
 
+    /// При полном сборе ниже этого порога мы считаем результат подозрительным
+    /// (вероятная тихая фильтрация по IP) и пробуем другой прокси, если есть свободные ретраи.
+    private const int MinFullScanReviewsThreshold = 5;
+
     public async Task<IReadOnlyList<RawReview>> FetchReviewsAsync(
         BranchTarget branch, DateRange period, CancellationToken ct)
     {
@@ -58,7 +62,8 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
         if (string.IsNullOrEmpty(orgUrl))
             orgUrl = $"https://yandex.ru/maps/org/{branch.ExternalId}/";
 
-        IReadOnlyList<RawReview>? reviews = null;
+        var isFullScan = period.From == DateTimeOffset.MinValue;
+        YandexCollectionOutcome? bestOutcome = null;
         Exception? lastException = null;
         var tried = new List<ProxyInfo>();
 
@@ -84,11 +89,12 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
                 var isHeadful = !_browserOptions.Headless;
                 _logger.LogDebug("[YandexPlugin] Headful: {Headful}", isHeadful);
 
+                YandexCollectionOutcome outcome;
                 if (_options.CollectionMode == YandexCollectionMode.BrowserScroll)
                 {
                     _logger.LogDebug("[YandexPlugin] Запускаю BrowserScrollCollector...");
                     var scrollCollector = new BrowserScrollCollector(_options, _logger);
-                    reviews = await scrollCollector.CollectAllReviewsAsync(
+                    outcome = await scrollCollector.CollectAllReviewsAsync(
                         browserContext, orgUrl, branch, period, isHeadful, ct);
                 }
                 else
@@ -100,11 +106,40 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
                     var apiClient = new YandexReviewApiClient(_logger);
                     var collector = new YandexReviewCollector(apiClient, _options, _logger);
 
-                    reviews = await collector.CollectAllReviewsAsync(session, branch, period, ct);
+                    outcome = await collector.CollectAllReviewsAsync(session, branch, period, ct);
                 }
 
-                _logger.LogInformation("[YandexPlugin] Попытка {Attempt} успешна: {Count} отзывов",
-                    attempt, reviews.Count);
+                // Сохраняем лучший результат — следующая попытка может вернуть меньше
+                // (например, провалится на transient ошибке после уже собранных страниц).
+                if (bestOutcome is null || outcome.Reviews.Count > bestOutcome.Reviews.Count)
+                    bestOutcome = outcome;
+
+                _logger.LogInformation(
+                    "[YandexPlugin] Попытка {Attempt} завершена: {Count} отзывов (hasMore={HasMore}, reachedDateBound={DateBound})",
+                    attempt, outcome.Reviews.Count, outcome.HasMore, outcome.ReachedDateBound);
+
+                // Подозрительно мало: полный сбор, Яндекс ещё мог отдавать страницы, в дату не упирались.
+                // Самая вероятная причина — тихая фильтрация по IP. Пробуем другой прокси.
+                var suspiciouslyFew = isFullScan
+                    && outcome.Reviews.Count < MinFullScanReviewsThreshold
+                    && outcome.HasMore
+                    && !outcome.ReachedDateBound;
+
+                if (suspiciouslyFew && attempt < _options.MaxRetries)
+                {
+                    _logger.LogWarning(
+                        "[YandexPlugin] Попытка {Attempt}/{MaxRetries}: всего {Count} отзывов при полном сборе (hasMore=true) — подозрение на тихую фильтрацию IP. Пробую другой прокси.",
+                        attempt, _options.MaxRetries, outcome.Reviews.Count);
+
+                    if (proxy != null)
+                        tried.Add(proxy);
+
+                    var backoff = (int)Math.Pow(2, attempt) * 1000;
+                    _logger.LogDebug("[YandexPlugin] Backoff: {Delay}мс перед следующей попыткой", backoff);
+                    await Task.Delay(backoff, ct);
+                    continue;
+                }
+
                 break;
             }
             catch (Exception ex) when (attempt < _options.MaxRetries && IsTransient(ex))
@@ -134,16 +169,18 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
             }
         }
 
-        if (reviews == null)
+        if (bestOutcome is null)
             throw lastException ?? new InvalidOperationException("Failed to collect reviews");
 
-        if (reviews.Count < 5)
-            _logger.LogWarning("[YandexPlugin] Мало отзывов: {Count} < 5 для {BusinessId}",
-                reviews.Count, branch.ExternalId);
+        if (bestOutcome.Reviews.Count < MinFullScanReviewsThreshold)
+            _logger.LogWarning(
+                "[YandexPlugin] Мало отзывов: {Count} < {Min} для {BusinessId} (hasMore={HasMore}, reachedDateBound={DateBound})",
+                bestOutcome.Reviews.Count, MinFullScanReviewsThreshold,
+                branch.ExternalId, bestOutcome.HasMore, bestOutcome.ReachedDateBound);
 
         _logger.LogInformation("[YandexPlugin] === Сбор завершён === {BusinessId}: {Count} отзывов",
-            branch.ExternalId, reviews.Count);
-        return reviews;
+            branch.ExternalId, bestOutcome.Reviews.Count);
+        return bestOutcome.Reviews;
     }
 
     public async Task<IReadOnlyList<SearchBranchResult>> SearchBranchesAsync(

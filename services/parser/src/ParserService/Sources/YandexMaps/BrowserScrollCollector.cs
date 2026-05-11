@@ -26,7 +26,7 @@ internal sealed class BrowserScrollCollector
         _logger = logger;
     }
 
-    public async Task<IReadOnlyList<RawReview>> CollectAllReviewsAsync(
+    public async Task<YandexCollectionOutcome> CollectAllReviewsAsync(
         IBrowserContext browserContext,
         string orgUrl,
         BranchTarget branch,
@@ -38,6 +38,7 @@ internal sealed class BrowserScrollCollector
         var seenIds = new HashSet<string>();
         var interceptedResponses = new ConcurrentQueue<YandexReviewsResponse>();
         var hasMore = true;
+        var reachedDateBound = false;
 
         var page = await browserContext.NewPageAsync();
         try
@@ -114,7 +115,7 @@ internal sealed class BrowserScrollCollector
 
             // --- Step 6: Process initial intercepted responses ---
             await Task.Delay(Random.Shared.Next(1000, 2000), ct);
-            var reachedDateBound = DrainQueue(interceptedResponses, reviews, seenIds, branch, period, ref hasMore);
+            reachedDateBound = DrainQueue(interceptedResponses, reviews, seenIds, branch, period, ref hasMore);
 
             _logger.LogInformation("[BrowserScroll] Первая порция: {Count} отзывов, есть ещё: {HasMore}, дата-граница: {DateBound}",
                 reviews.Count, hasMore, reachedDateBound);
@@ -179,7 +180,7 @@ internal sealed class BrowserScrollCollector
                 "[BrowserScroll] Сбор завершён для {BusinessId}: {Count} отзывов, уникальных ID: {Unique}, hasMore: {HasMore}, дата-граница: {DateBound}",
                 branch.ExternalId, reviews.Count, seenIds.Count, hasMore, reachedDateBound);
 
-            return reviews;
+            return new YandexCollectionOutcome(reviews, hasMore, reachedDateBound);
         }
         finally
         {
@@ -219,36 +220,48 @@ internal sealed class BrowserScrollCollector
     private async Task SelectSortByDateAsync(IPage page, CancellationToken ct)
     {
         // The sort control is a div.rating-ranking-view with role="button" (NOT a <button>).
-        // It contains <span>По умолчанию</span>. Clicking it opens a <dialog> with options.
+        // It contains <span>По умолчанию</span>. Clicking it opens a [role="dialog"] popup.
 
-        // Step 1: Wait for the sort control to appear and click it.
+        // Step 1: Click sort dropdown. Жадный [class*='ranking-view'] убран — он мог матчить
+        // соседние блоки (рейтинг, фильтры) и кликать не туда. Поэтому после клика обязательно
+        // дожидаемся появления [role='dialog'] как сигнала, что открылся именно sort-popup;
+        // если не появился — пробуем следующий селектор.
         var dropdownSelectors = new[]
         {
             ".rating-ranking-view",
             ".business-reviews-card-view__ranking [role='button']",
-            "[class*='ranking-view']",
         };
 
-        bool dropdownOpened = false;
+        bool dialogOpened = false;
         foreach (var selector in dropdownSelectors)
         {
             try
             {
                 var el = await page.WaitForSelectorAsync(selector,
                     new PageWaitForSelectorOptions { State = WaitForSelectorState.Visible, Timeout = 10_000 });
-                if (el != null)
-                {
-                    var text = await el.TextContentAsync() ?? "";
-                    if (text.Contains("По новизне"))
-                    {
-                        _logger.LogDebug("Sort already set to 'По новизне', skipping");
-                        return;
-                    }
+                if (el == null) continue;
 
-                    await el.ClickAsync();
-                    _logger.LogDebug("Opened sort dropdown via: {Selector}", selector);
-                    dropdownOpened = true;
+                var text = await el.TextContentAsync() ?? "";
+                if (text.Contains("По новизне"))
+                {
+                    _logger.LogDebug("[BrowserScroll] Сортировка уже 'По новизне' (через {Selector}), пропускаю", selector);
+                    return;
+                }
+
+                await el.ClickAsync();
+                _logger.LogDebug("[BrowserScroll] Кликнул sort dropdown через {Selector}, жду [role='dialog']", selector);
+
+                try
+                {
+                    await page.WaitForSelectorAsync("[role='dialog']",
+                        new PageWaitForSelectorOptions { State = WaitForSelectorState.Visible, Timeout = 5_000 });
+                    dialogOpened = true;
+                    _logger.LogDebug("[BrowserScroll] Sort dialog открылся после клика {Selector}", selector);
                     break;
+                }
+                catch
+                {
+                    _logger.LogDebug("[BrowserScroll] Клик через {Selector} не открыл [role='dialog'], пробую следующий", selector);
                 }
             }
             catch
@@ -257,9 +270,9 @@ internal sealed class BrowserScrollCollector
             }
         }
 
-        if (!dropdownOpened)
+        if (!dialogOpened)
         {
-            _logger.LogWarning("Could not open sort dropdown, using default sort");
+            _logger.LogWarning("[BrowserScroll] Не удалось открыть sort dialog, использую дефолтную сортировку");
             return;
         }
 
@@ -267,12 +280,13 @@ internal sealed class BrowserScrollCollector
 
         // Step 2: Click "По новизне" inside the opened popup.
         // Options are <div role="button" class="rating-ranking-view__popup-line">, NOT <button>.
-        // Container is [role="dialog"], NOT <dialog>.
+        // Последний селектор — fallback по всей странице на случай, если контейнер не [role='dialog'].
         var optionSelectors = new[]
         {
             ".rating-ranking-view__popup-line[aria-label='По новизне']",
             "[role='dialog'] [role='button']:has-text('По новизне')",
             "[role='dialog'] :has-text('По новизне')",
+            "[role='button']:visible:has-text('По новизне')",
         };
 
         foreach (var selector in optionSelectors)
@@ -284,7 +298,7 @@ internal sealed class BrowserScrollCollector
                 if (el != null)
                 {
                     await el.ClickAsync();
-                    _logger.LogDebug("Selected 'По новизне' via: {Selector}", selector);
+                    _logger.LogDebug("[BrowserScroll] Выбрал 'По новизне' через {Selector}", selector);
                     await Task.Delay(Random.Shared.Next(2000, 3000), ct);
                     return;
                 }
@@ -295,7 +309,26 @@ internal sealed class BrowserScrollCollector
             }
         }
 
-        _logger.LogWarning("Could not find 'По новизне' option in sort dialog");
+        // Не нашли опцию — дампим кусок DOM в лог, чтобы было видно, что Яндекс отдал.
+        try
+        {
+            var dialogHtml = await page.EvaluateAsync<string>("""
+                () => {
+                    const d = document.querySelector('[role="dialog"]')
+                        || document.querySelector('[class*="popup"]')
+                        || document.querySelector('[class*="ranking-view"]');
+                    return d ? d.outerHTML.slice(0, 2000) : '(no dialog/popup/ranking element found)';
+                }
+            """);
+            _logger.LogWarning(
+                "[BrowserScroll] Не нашёл 'По новизне' в sort dialog. DOM snapshot (first 2KB): {Html}",
+                dialogHtml);
+        }
+        catch (Exception dumpEx)
+        {
+            _logger.LogWarning(dumpEx,
+                "[BrowserScroll] Не нашёл 'По новизне' в sort dialog (DOM dump провалился)");
+        }
     }
 
     private async Task TriggerNextPageAsync(IPage page, CancellationToken ct)

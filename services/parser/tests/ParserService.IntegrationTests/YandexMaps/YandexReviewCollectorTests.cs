@@ -44,12 +44,12 @@ public class YandexReviewCollectorTests
         var collector = new YandexReviewCollector(fakeClient, _options, NullLogger.Instance);
 
         var period = new DateRange(DateTimeOffset.MinValue, DateTimeOffset.UtcNow);
-        var reviews = await collector.CollectAllReviewsAsync(
+        var outcome = await collector.CollectAllReviewsAsync(
             null!, _branch, period, CancellationToken.None);
 
         // 4 unique review IDs across both pages (rev-002 is a duplicate)
-        reviews.Should().HaveCount(4);
-        reviews.Select(r => r.ExternalId).Should().OnlyHaveUniqueItems();
+        outcome.Reviews.Should().HaveCount(4);
+        outcome.Reviews.Select(r => r.ExternalId).Should().OnlyHaveUniqueItems();
     }
 
     /// <summary>
@@ -72,13 +72,14 @@ public class YandexReviewCollectorTests
             new DateTimeOffset(2025, 3, 1, 0, 0, 0, TimeSpan.Zero),
             DateTimeOffset.UtcNow);
 
-        var reviews = await collector.CollectAllReviewsAsync(
+        var outcome = await collector.CollectAllReviewsAsync(
             null!, _branch, period, CancellationToken.None);
 
         // rev-001 (Apr 1), rev-002 (Mar 28), rev-003 (Mar 15) are in range
         // rev-004 (Feb 20) is before March 1 — excluded, triggers stop
-        reviews.Should().HaveCount(3);
-        reviews.Should().OnlyContain(r => r.Date >= period.From);
+        outcome.Reviews.Should().HaveCount(3);
+        outcome.Reviews.Should().OnlyContain(r => r.Date >= period.From);
+        outcome.ReachedDateBound.Should().BeTrue();
     }
 
     /// <summary>
@@ -98,15 +99,15 @@ public class YandexReviewCollectorTests
             new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero),
             DateTimeOffset.UtcNow);
 
-        var reviews = await collector.CollectAllReviewsAsync(
+        var outcome = await collector.CollectAllReviewsAsync(
             null!, _branch, period, CancellationToken.None);
 
-        var first = reviews.First(r => r.ExternalId == "rev-001");
+        var first = outcome.Reviews.First(r => r.ExternalId == "rev-001");
         first.AuthorName.Should().Be("Иван Петров");
         first.AuthorPublicId.Should().Be("abc123def456");
         first.TextLanguage.Should().Be("ru");
 
-        var english = reviews.First(r => r.ExternalId == "rev-003");
+        var english = outcome.Reviews.First(r => r.ExternalId == "rev-003");
         english.TextLanguage.Should().Be("en");
         english.AuthorName.Should().Be("John Smith");
     }
@@ -127,10 +128,10 @@ public class YandexReviewCollectorTests
             new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero),
             DateTimeOffset.UtcNow);
 
-        var reviews = await collector.CollectAllReviewsAsync(
+        var outcome = await collector.CollectAllReviewsAsync(
             null!, _branch, period, CancellationToken.None);
 
-        reviews.Should().OnlyContain(r => r.BranchId == _branch.BranchId);
+        outcome.Reviews.Should().OnlyContain(r => r.BranchId == _branch.BranchId);
     }
 
     private static string LoadFixture(string filename)
