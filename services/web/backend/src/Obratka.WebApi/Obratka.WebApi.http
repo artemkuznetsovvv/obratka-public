@@ -1,0 +1,46 @@
+@host = http://localhost:5100
+
+### Login as admin (use seed creds from appsettings.Development.json)
+# @name login
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@obratka.local",
+  "password": "***REMOVED***"
+}
+
+### Save the access token from previous response
+@accessToken = {{login.response.body.accessToken}}
+
+### Me
+GET {{host}}/api/auth/me
+Authorization: Bearer {{accessToken}}
+
+### Refresh (uses refresh cookie set by /login)
+POST {{host}}/api/auth/refresh
+
+### List admin users
+GET {{host}}/api/admin/users
+Authorization: Bearer {{accessToken}}
+
+### List proxies via admin (proxies in Parser-Service)
+GET {{host}}/api/admin/proxies
+Authorization: Bearer {{accessToken}}
+
+### List parser tasks
+GET {{host}}/api/admin/parser-tasks
+Authorization: Bearer {{accessToken}}
+
+### Register new user
+POST {{host}}/api/auth/register
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "Test12345",
+  "fullName": "Test User"
+}
+
+### Logout
+POST {{host}}/api/auth/logout

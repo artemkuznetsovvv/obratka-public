@@ -1,0 +1,76 @@
+# ---------- .NET ----------
+**/bin/
+**/obj/
+**/out/
+*.user
+*.suo
+*.userprefs
+*.userosscache
+*.sln.docstates
+*.lock.json
+.vs/
+.idea/
+*.DotSettings.user
+.vshistory/
+
+# Rider / Resharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+
+# Build / packaging
+[Dd]ebug/
+[Rr]elease/
+[Bb]uild[Ll]og.*
+*.binlog
+artifacts/
+publish/
+TestResults/
+*.trx
+coverage*.xml
+coverage*.json
+.coverlet/
+
+# EF Core
+**/Migrations/*.designer.cs.bak
+
+# ---------- Node / Vite (frontend) ----------
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# ---------- Logs / temp ----------
+*.log
+logs/
+*.tmp
+.DS_Store
+Thumbs.db
+
+# ---------- Secrets / local config ----------
+# appsettings.json / appsettings.Development.json — tracked (no real secrets, dev defaults only)
+# Real prod secrets live in env vars; user-specific overrides in *.local.json (ignored).
+**/appsettings.Local.json
+**/appsettings.*.local.json
+.env
+.env.local
+.env.*.local
+secrets.json
+*.pfx
+*.pem
+*.key
+
+# ---------- Docker / runtime data ----------
+infra/data/
+infra/.volumes/
+**/*.sqlite
+**/*.sqlite-journal
+
+# ---------- Design assets (вне репо) ----------
+design/
+
+# ---------- IDE / editor ----------
+.vscode/launch.json
+.vscode/tasks.json
+*.swp
+*.swo
