@@ -6,6 +6,11 @@ public record CollectionProgressEntry
 {
     public Guid? TaskId { get; init; }
 
+    /// Момент старта **этой** Parser-таски. Используется для расчёта таймаута per-source,
+    /// чтобы рестарт источника на старом job-е не помечался failed сразу же
+    /// (для legacy-job-ов без этого поля поллер фолбэчится на `analysis_jobs.created_at`).
+    public DateTimeOffset? StartedAt { get; init; }
+
     /// "pending" | "running" | "completed" | "failed" — slug-формат Parser-а.
     public required string Status { get; init; }
 

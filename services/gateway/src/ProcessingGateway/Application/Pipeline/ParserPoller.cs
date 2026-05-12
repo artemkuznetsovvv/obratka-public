@@ -115,8 +115,11 @@ public sealed class ParserPoller : BackgroundService
                 continue;
             }
 
-            // Таймаут (от created_at). Parser-таска зависла — фиксируем failure и идём дальше.
-            var elapsed = DateTimeOffset.UtcNow - job.CreatedAt;
+            // Таймаут per-task: от StartedAt этой таски (fallback на job.CreatedAt
+            // для legacy-job-ов без StartedAt). Без этого рестарт источника на старом
+            // job-е сразу падал бы в failed, потому что job.CreatedAt далеко в прошлом.
+            var taskStartedAt = entry.StartedAt ?? job.CreatedAt;
+            var elapsed = DateTimeOffset.UtcNow - taskStartedAt;
             if (elapsed > _taskTimeout)
             {
                 progress[source] = entry with

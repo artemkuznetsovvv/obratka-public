@@ -47,8 +47,15 @@ public sealed class QaParserController : ControllerBase
     }
 
     /// Перезапустить сбор по одному источнику в рамках уже существующего job-а.
-    /// Job должен быть в `collecting` (иначе ParserPoller не подхватит).
-    /// Использование: парсер-таск завис, реальный пользователь хочет ускорить.
+    /// Допустимые исходные статусы: `collecting`, `completed`, `partial`, `failed` —
+    /// то есть либо активный сбор, либо терминальные состояния, из которых можно
+    /// «отмотать» job назад. Из `sent_to_llm`/`computing_aggregates` рестарт запрещён —
+    /// pipeline активно работает и сброс может потерять in-flight состояние.
+    ///
+    /// При рестарте из терминального статуса job возвращается в `collecting`
+    /// (чтобы `ParserPoller` подхватил новую таску); по завершении сбора
+    /// `AnalysisOrchestrator` снова дойдёт до LLM и перепишет результаты.
+    /// `completed_at`/`error` сбрасываются.
     [HttpPost("restart-source/{jobId:guid}/{source}")]
     public async Task<IActionResult> RestartSource(
         Guid jobId,
@@ -58,8 +65,17 @@ public sealed class QaParserController : ControllerBase
     {
         var job = await _db.AnalysisJobs.FirstOrDefaultAsync(j => j.Id == jobId, ct);
         if (job is null) return NotFound();
-        if (job.Status != AnalysisJobStatus.Collecting)
-            return Conflict(new { error = $"Job in status {job.Status.ToWire()}, restart допустим только в collecting" });
+
+        var restartable = job.Status
+            is AnalysisJobStatus.Collecting
+            or AnalysisJobStatus.Completed
+            or AnalysisJobStatus.Partial
+            or AnalysisJobStatus.Failed;
+        if (!restartable)
+            return Conflict(new
+            {
+                error = $"Job in status {job.Status.ToWire()}, restart допустим только из collecting/completed/partial/failed"
+            });
         if (request.Branches is null || request.Branches.Count == 0)
             return BadRequest(new { error = "branches required" });
 
@@ -72,21 +88,40 @@ public sealed class QaParserController : ControllerBase
             Branches: request.Branches), ct);
 
         // Замещаем существующую запись в collection_progress[source].
+        // StartedAt = NOW — иначе ParserPoller отсчитает таймаут от job.CreatedAt
+        // и сразу пометит новую таску failed на старом job-е.
         var progress = new Dictionary<string, CollectionProgressEntry>(job.CollectionProgress);
         progress[source] = new CollectionProgressEntry
         {
             TaskId = taskId,
+            StartedAt = DateTimeOffset.UtcNow,
             Status = "pending",
             Progress = 0
         };
         job.CollectionProgress = progress;
 
+        // Если job был в терминальном состоянии — откатываем в collecting, чтобы поллер подхватил.
+        var previousStatus = job.Status;
+        if (previousStatus != AnalysisJobStatus.Collecting)
+        {
+            job.Status = AnalysisJobStatus.Collecting;
+            job.CompletedAt = null;
+            job.Error = null;
+        }
+
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
-            "QA parser/restart-source: job={AnalysisJobId} source={Source} new task_id={TaskId}",
-            jobId, source, taskId);
-        return Accepted(new { source, task_id = taskId });
+            "QA parser/restart-source: job={AnalysisJobId} source={Source} new task_id={TaskId} " +
+            "previous_status={PreviousStatus}",
+            jobId, source, taskId, previousStatus.ToWire());
+        return Accepted(new
+        {
+            source,
+            task_id = taskId,
+            previous_status = previousStatus.ToWire(),
+            current_status = job.Status.ToWire()
+        });
     }
 
     public sealed record RestartSourceRequest(

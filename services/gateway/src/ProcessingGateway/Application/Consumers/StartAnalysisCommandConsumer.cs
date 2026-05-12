@@ -110,6 +110,7 @@ public sealed class StartAnalysisCommandConsumer : IConsumer<StartAnalysisComman
                 collectionProgress[source] = new CollectionProgressEntry
                 {
                     TaskId = taskId,
+                    StartedAt = DateTimeOffset.UtcNow,
                     Status = "pending",
                     Progress = 0
                 };
