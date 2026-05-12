@@ -68,11 +68,32 @@ public sealed class LlmDispatcher
             return;
         }
 
+        // Отзывы без текста (только звёзды) не имеют смысла для LLM-анализа — отбрасываем
+        // их из input.json, чтобы не жечь OpenRouter-квоту на пустые промпты. Сами записи
+        // остаются в `reviews` и `analysis_job_reviews` — их `stars` всё равно учитываются
+        // Web API Analytics-модулем при расчёте рейтинговых агрегатов.
+        var reviewsForLlm = reviews
+            .Where(r => !string.IsNullOrWhiteSpace(r.RawText))
+            .ToList();
+        var skippedEmpty = reviews.Count - reviewsForLlm.Count;
+
+        if (reviewsForLlm.Count == 0)
+        {
+            _logger.LogWarning(
+                "LlmDispatcher: job {AnalysisJobId} has {Collected} linked reviews but all are empty-text; failing job",
+                jobId, reviews.Count);
+            job.Status = AnalysisJobStatus.Failed;
+            job.Error = "All collected reviews have empty text — nothing to analyze";
+            job.CompletedAt = DateTimeOffset.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            return;
+        }
+
         var input = new LlmInput(
             SchemaVersion: CurrentSchemaVersion,
             AnalysisJobId: jobId,
             CompanyId: job.CompanyId,
-            Reviews: reviews.Select(r => new LlmInputReview(
+            Reviews: reviewsForLlm.Select(r => new LlmInputReview(
                 ReviewId: r.Id,
                 Text: r.RawText,
                 Source: r.Source,
@@ -91,6 +112,8 @@ public sealed class LlmDispatcher
         job.PayloadUrl = payloadUrl;
         job.SentAt = DateTimeOffset.UtcNow;
         job.Status = AnalysisJobStatus.SentToLlm;
+        // ReviewCount = всё, что собрано и привязано к job (для UI/Status API).
+        // В LLM ушло `reviewsForLlm.Count` — это видно из input.json и LlmRequestMessage.
         job.ReviewCount = reviews.Count;
 
         // Send ДО SaveChanges — Outbox присоединит сообщение к транзакции и отправит после commit.
@@ -99,14 +122,15 @@ public sealed class LlmDispatcher
             AnalysisJobId: jobId,
             CompanyId: job.CompanyId,
             PayloadUrl: payloadUrl,
-            ReviewCount: reviews.Count,
+            ReviewCount: reviewsForLlm.Count,
             SchemaVersion: CurrentSchemaVersion,
             CallbackQueue: callbackQueue), ct);
 
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
-            "LLM request sent to {Queue} for job {AnalysisJobId}: {ReviewCount} reviews, payload={PayloadUrl}",
-            requestQueue, jobId, reviews.Count, payloadUrl);
+            "LLM request sent to {Queue} for job {AnalysisJobId}: {SentCount} reviews sent " +
+            "({Collected} collected, {SkippedEmpty} skipped as empty-text), payload={PayloadUrl}",
+            requestQueue, jobId, reviewsForLlm.Count, reviews.Count, skippedEmpty, payloadUrl);
     }
 }
