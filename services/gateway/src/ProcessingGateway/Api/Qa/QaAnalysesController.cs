@@ -77,6 +77,60 @@ public sealed class QaAnalysesController : ControllerBase
 
     // --- Debug snapshot ---
 
+    /// Список анализов с пагинацией и фильтрами. Каждый item — та же форма,
+    /// что отдаёт GetSnapshot, чтобы admin-UI мог раскрыть строку и показать
+    /// collection_progress без дополнительного запроса.
+    [HttpGet]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> List(
+        [FromQuery] string? status,
+        [FromQuery(Name = "companyId")] Guid? companyId,
+        [FromQuery] int? limit,
+        [FromQuery] int? offset,
+        CancellationToken ct)
+    {
+        var take = Math.Clamp(limit ?? 50, 1, 500);
+        var skip = Math.Max(offset ?? 0, 0);
+
+        AnalysisJobStatus? statusFilter = null;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            try { statusFilter = AnalysisJobStatusExtensions.FromWire(status); }
+            catch (ArgumentException) { return BadRequest(new { error = $"Unknown status: '{status}'" }); }
+        }
+
+        var query = _db.AnalysisJobs.AsNoTracking();
+        if (companyId is not null) query = query.Where(j => j.CompanyId == companyId.Value);
+        if (statusFilter is not null) query = query.Where(j => j.Status == statusFilter.Value);
+
+        var total = await query.CountAsync(ct);
+        var jobs = await query
+            .OrderByDescending(j => j.CreatedAt)
+            .Skip(skip).Take(take)
+            .ToListAsync(ct);
+
+        var items = jobs.Select(job => new
+        {
+            id = job.Id,
+            company_id = job.CompanyId,
+            status = job.Status.ToWire(),
+            review_count = job.ReviewCount,
+            collection_progress = job.CollectionProgress,
+            payload_url = job.PayloadUrl,
+            result_reviews_url = job.ResultReviewsUrl,
+            result_summary_url = job.ResultSummaryUrl,
+            summary = job.Summary,
+            recommendations_count = job.RecommendationsCount,
+            created_at = job.CreatedAt,
+            sent_at = job.SentAt,
+            completed_at = job.CompletedAt,
+            error = job.Error
+        }).ToList();
+
+        return Ok(new { total, limit = take, offset = skip, items });
+    }
+
     /// Полный снимок строки `analysis_jobs` без trim-ов — то, что в БД ровно сейчас.
     [HttpGet("{jobId:guid}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
