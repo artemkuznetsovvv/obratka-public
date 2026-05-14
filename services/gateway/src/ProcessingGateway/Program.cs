@@ -174,7 +174,19 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.UseMiddleware<CorrelationIdMiddleware>();
-app.UseSerilogRequestLogging();
+app.UseSerilogRequestLogging(options =>
+{
+    // Successful responses logged at Debug — drops out under MinimumLevel=Information.
+    // 4xx → Warning, 5xx / exceptions → Error. Slow successful requests bump to Warning so
+    // performance issues stay visible.
+    options.GetLevel = (httpContext, elapsedMs, ex) =>
+    {
+        if (ex is not null || httpContext.Response.StatusCode >= 500) return LogEventLevel.Error;
+        if (httpContext.Response.StatusCode >= 400) return LogEventLevel.Warning;
+        if (elapsedMs > 1000) return LogEventLevel.Warning;
+        return LogEventLevel.Debug;
+    };
+});
 
 // Health endpoints — голые `app.MapGet`, ВНЕ health-check-infrastructure ASP.NET Core.
 // MapHealthChecks(...) в .NET 9 при построении endpoint-а проходит по всем
