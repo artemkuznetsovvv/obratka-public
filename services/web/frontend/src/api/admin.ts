@@ -151,3 +151,63 @@ export const adminAnalysesApi = {
   get: (jobId: string) =>
     http.get<AnalysisJob>(`/api/admin/analyses/${jobId}`).then((r) => r.data),
 }
+
+// ----- Companies (admin registry) -----
+export interface AdminCompanyListItem {
+  id: string
+  name: string
+  category: string | null
+  subcategory: string | null
+  cities: string[]
+  branchCount: number
+  selectedBranchCount: number
+  ownerUserId: string
+  ownerEmail: string
+  ownerFullName: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AdminCompanyListResponse {
+  total: number
+  limit: number
+  offset: number
+  items: AdminCompanyListItem[]
+}
+
+export interface AdminCompanyBranchDto {
+  id: string
+  source: string
+  externalId: string
+  externalUrl: string
+  name: string
+  address: string | null
+  city: string
+  rating: number | null
+  reviewCount: number | null
+  isSelected: boolean
+  createdAt: string
+}
+
+export interface AdminCompanyDetails {
+  id: string
+  name: string
+  category: string | null
+  subcategory: string | null
+  cities: string[]
+  description: string | null
+  ownerUserId: string
+  ownerEmail: string
+  ownerFullName: string
+  createdAt: string
+  updatedAt: string
+  branches: AdminCompanyBranchDto[]
+}
+
+export const adminCompaniesApi = {
+  list: (params?: { limit?: number; offset?: number; search?: string }) =>
+    http.get<AdminCompanyListResponse>('/api/admin/companies', { params }).then((r) => r.data),
+
+  get: (id: string) =>
+    http.get<AdminCompanyDetails>(`/api/admin/companies/${id}`).then((r) => r.data),
+}
