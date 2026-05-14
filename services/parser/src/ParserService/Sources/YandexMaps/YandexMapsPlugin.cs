@@ -58,9 +58,13 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
         await _rateLimiter.WaitAsync(SourceType.YandexMaps, ct);
         _logger.LogDebug("[YandexPlugin] Rate limiter пройден");
 
-        var orgUrl = branch.ExternalUrl;
-        if (string.IsNullOrEmpty(orgUrl))
-            orgUrl = $"https://yandex.ru/maps/org/{branch.ExternalId}/";
+        // Игнорируем branch.ExternalUrl: с фронта может прийти URL с query от страницы поиска
+        // (?text=...&mode=search&ll=...&z=16). BuildReviewsUrl в коллекторе тупо добавляет
+        // /reviews/ к концу, получается мусор типа .../?ll=...&z=16/reviews/ — Яндекс такой
+        // URL не открывает как reviews-страницу, в результате собиралось 3 отзыва вместо 600.
+        // Минимальный URL из businessId всегда корректен — Яндекс сам редиректит на полную
+        // форму со slug. ExternalUrl остаётся в стартовом логе для диагностики.
+        var orgUrl = $"https://yandex.ru/maps/org/{branch.ExternalId}/";
 
         var isFullScan = period.From == DateTimeOffset.MinValue;
         YandexCollectionOutcome? bestOutcome = null;
