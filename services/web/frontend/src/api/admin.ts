@@ -144,12 +144,82 @@ export interface AnalysisJobListResponse {
   items: AnalysisJob[]
 }
 
+export interface StartAnalysisRequest {
+  companyId: string
+  dateFrom?: string | null
+  dateTo?: string | null
+}
+
+export interface StartAnalysisResponse {
+  analysisJobId: string
+}
+
+export interface RestartSourceRequest {
+  dateFrom?: string | null
+  dateTo?: string | null
+}
+
+export interface RestartSourceResponse {
+  source: string
+  taskId: string
+  previousStatus: string
+  currentStatus: string
+}
+
+export interface JobBlobItem {
+  key: string
+  size: number
+  lastModified: string
+}
+
+export interface JobBlobList {
+  bucket: string
+  prefix: string
+  count: number
+  items: JobBlobItem[]
+}
+
 export const adminAnalysesApi = {
   list: (params?: { status?: string; companyId?: string; limit?: number; offset?: number }) =>
     http.get<AnalysisJobListResponse>('/api/admin/analyses', { params }).then((r) => r.data),
 
   get: (jobId: string) =>
     http.get<AnalysisJob>(`/api/admin/analyses/${jobId}`).then((r) => r.data),
+
+  start: (request: StartAnalysisRequest) =>
+    http.post<StartAnalysisResponse>('/api/admin/analyses', request).then((r) => r.data),
+
+  restartSource: (jobId: string, source: string, request: RestartSourceRequest) =>
+    http
+      .post<RestartSourceResponse>(`/api/admin/analyses/${jobId}/restart-source/${source}`, request)
+      .then((r) => r.data),
+
+  llmReplay: (jobId: string) =>
+    http.post<void>(`/api/admin/analyses/${jobId}/llm-replay`).then((r) => r.data),
+
+  listBlobs: (jobId: string) =>
+    http.get<JobBlobList>(`/api/admin/analyses/${jobId}/blobs`).then((r) => r.data),
+
+  // Returns a Blob + suggested filename. Body is streamed through Web API, so JWT auth applies.
+  downloadBlob: async (jobId: string, name: string) => {
+    const response = await http.get<Blob>(`/api/admin/analyses/${jobId}/blobs/${name}`, {
+      responseType: 'blob',
+    })
+    const disposition = response.headers['content-disposition'] as string | undefined
+    const fileName = parseFileName(disposition) ?? `${jobId}-${name.replace('/', '-')}.json`
+    return { blob: response.data, fileName }
+  },
+}
+
+function parseFileName(disposition: string | undefined): string | null {
+  if (!disposition) return null
+  // matches filename*=UTF-8''...  OR  filename="..."  OR  filename=...
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(disposition)
+  if (utf8) return decodeURIComponent(utf8[1])
+  const quoted = /filename="([^"]+)"/i.exec(disposition)
+  if (quoted) return quoted[1]
+  const bare = /filename=([^;]+)/i.exec(disposition)
+  return bare ? bare[1].trim() : null
 }
 
 // ----- Companies (admin registry) -----

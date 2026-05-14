@@ -7,6 +7,7 @@ import UsersPage from '@/pages/admin/UsersPage'
 import ProxiesPage from '@/pages/admin/ProxiesPage'
 import ParserTasksPage from '@/pages/admin/ParserTasksPage'
 import AnalysesPage from '@/pages/admin/AnalysesPage'
+import AnalysisDetailPage from '@/pages/admin/AnalysisDetailPage'
 import CompaniesPage from '@/pages/admin/CompaniesPage'
 import ComingSoonPage from '@/pages/ComingSoonPage'
 import NewAnalysisPage from '@/pages/analyses/NewAnalysisPage'
@@ -89,6 +90,14 @@ export default function App() {
         element={
           <ProtectedRoute requiredRole="Admin">
             <AnalysesPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/analyses/:jobId"
+        element={
+          <ProtectedRoute requiredRole="Admin">
+            <AnalysisDetailPage />
           </ProtectedRoute>
         }
       />

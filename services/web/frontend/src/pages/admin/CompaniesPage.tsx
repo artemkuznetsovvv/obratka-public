@@ -1,12 +1,23 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, MapPin, Search, Star } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { ChevronDown, ChevronRight, MapPin, Play, Search, Star } from 'lucide-react'
 import { AppLayout } from '@/layouts/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { adminCompaniesApi, type AdminCompanyDetails } from '@/api/admin'
+import { adminAnalysesApi, adminCompaniesApi, type AdminCompanyDetails, type AdminCompanyListItem } from '@/api/admin'
 import { cn } from '@/lib/utils'
 
 const SOURCE_META: Record<string, { label: string; color: string }> = {
@@ -19,6 +30,7 @@ export default function CompaniesPage() {
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [launchTarget, setLaunchTarget] = useState<AdminCompanyListItem | null>(null)
 
   const listQuery = useQuery({
     queryKey: ['admin', 'companies', debouncedSearch],
@@ -79,12 +91,13 @@ export default function CompaniesPage() {
                 <TableHead>Города</TableHead>
                 <TableHead className="text-right">Выбрано / найдено</TableHead>
                 <TableHead>Создана</TableHead>
+                <TableHead className="w-44 text-right" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {listQuery.data.items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-text-secondary py-12">
+                  <TableCell colSpan={8} className="text-center text-text-secondary py-12">
                     Компаний пока нет
                   </TableCell>
                 </TableRow>
@@ -143,8 +156,27 @@ export default function CompaniesPage() {
                       <TableCell className="text-text-secondary text-sm">
                         {new Date(c.createdAt).toLocaleDateString('ru-RU')}
                       </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={c.selectedBranchCount === 0}
+                          title={
+                            c.selectedBranchCount === 0
+                              ? 'У компании нет выбранных филиалов'
+                              : 'Запустить анализ выбранных филиалов'
+                          }
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setLaunchTarget(c)
+                          }}
+                        >
+                          <Play size={14} />
+                          Запустить
+                        </Button>
+                      </TableCell>
                     </TableRow>
-                    {isOpen && <CompanyDetailsRow id={c.id} />}
+                    {isOpen && <CompanyDetailsRow id={c.id} colSpan={8} />}
                   </RowGroup>
                 )
               })}
@@ -152,15 +184,116 @@ export default function CompaniesPage() {
           </Table>
         )}
       </Card>
+
+      <LaunchAnalysisDialog
+        company={launchTarget}
+        onClose={() => setLaunchTarget(null)}
+      />
     </AppLayout>
   )
+}
+
+function LaunchAnalysisDialog({
+  company,
+  onClose,
+}: {
+  company: AdminCompanyListItem | null
+  onClose: () => void
+}) {
+  const navigate = useNavigate()
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  const launch = useMutation({
+    mutationFn: () => {
+      if (!company) throw new Error('No company selected')
+      return adminAnalysesApi.start({
+        companyId: company.id,
+        dateFrom: toIsoOrNull(dateFrom),
+        dateTo: toIsoOrNull(dateTo),
+      })
+    },
+    onSuccess: (response) => {
+      onClose()
+      setDateFrom('')
+      setDateTo('')
+      setError(null)
+      navigate(`/admin/analyses/${response.analysisJobId}`)
+    },
+    onError: (err) => setError(err instanceof Error ? err.message : 'Не удалось запустить анализ'),
+  })
+
+  const open = !!company
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) {
+          onClose()
+          setError(null)
+        }
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Запуск анализа</DialogTitle>
+          <DialogDescription>
+            {company && (
+              <>
+                Компания <span className="font-medium text-text-primary">{company.name}</span> —
+                будут отправлены {company.selectedBranchCount} выбранных филиал(ов).
+              </>
+            )}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-text-secondary mb-1">С даты</label>
+            <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-text-secondary mb-1">По дату</label>
+            <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </div>
+        </div>
+        <p className="text-xs text-text-tertiary">
+          Оба поля опциональны. Пусто = парсер собирает весь доступный диапазон.
+        </p>
+
+        {error && (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {error}
+          </div>
+        )}
+
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline">Отмена</Button>
+          </DialogClose>
+          <Button onClick={() => launch.mutate()} disabled={launch.isPending} className="gap-2">
+            <Play size={14} />
+            {launch.isPending ? 'Запускаем…' : 'Запустить'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function toIsoOrNull(value: string): string | null {
+  if (!value) return null
+  // value is a date-only string from <input type="date">, treat it as UTC midnight.
+  const date = new Date(`${value}T00:00:00Z`)
+  return isNaN(date.getTime()) ? null : date.toISOString()
 }
 
 function RowGroup({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
-function CompanyDetailsRow({ id }: { id: string }) {
+function CompanyDetailsRow({ id, colSpan }: { id: string; colSpan: number }) {
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['admin', 'companies', 'details', id],
     queryFn: () => adminCompaniesApi.get(id),
@@ -168,7 +301,7 @@ function CompanyDetailsRow({ id }: { id: string }) {
 
   return (
     <TableRow className="bg-page-bg/40 hover:bg-page-bg/40">
-      <TableCell colSpan={7} className="p-0">
+      <TableCell colSpan={colSpan} className="p-0">
         <div className="px-6 py-5">
           {isLoading && <div className="text-sm text-text-secondary">Загрузка деталей…</div>}
           {isError && (
