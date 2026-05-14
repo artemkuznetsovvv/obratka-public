@@ -6,5 +6,6 @@ public sealed class ProcessingGatewayOptions
 
     public string BaseUrl { get; init; } = string.Empty;
     public string? ApiKey { get; init; }
-    public int TimeoutSeconds { get; init; } = 30;
+    // 60s покрывает стрим S3-блобов через прокси (raw/<source>.json может быть несколько МБ).
+    public int TimeoutSeconds { get; init; } = 60;
 }

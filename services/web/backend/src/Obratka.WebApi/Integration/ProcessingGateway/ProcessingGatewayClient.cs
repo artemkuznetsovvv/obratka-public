@@ -37,6 +37,60 @@ internal sealed class ProcessingGatewayClient(HttpClient httpClient) : IProcessi
         return raw is null ? null : AnalysisJobMapping.ToDto(raw);
     }
 
+    public async Task<StartAnalysisQaResponse> StartAnalysisAsync(StartAnalysisQaRequest request, CancellationToken ct)
+    {
+        var response = await httpClient.PostAsJsonAsync("api/qa/analyses", request, ct);
+        await EnsureSuccess(response, ct);
+        var raw = await response.Content.ReadFromJsonAsync<RawStartAnalysisResponse>(ct)
+                  ?? throw new InvalidOperationException("Processing-Gateway returned empty start-analysis response");
+        return new StartAnalysisQaResponse(raw.AnalysisJobId);
+    }
+
+    public async Task<RestartSourceQaResponse> RestartSourceAsync(
+        Guid jobId, string source, RestartSourceQaRequest request, CancellationToken ct)
+    {
+        var response = await httpClient.PostAsJsonAsync(
+            $"api/qa/parser/restart-source/{jobId}/{Uri.EscapeDataString(source)}", request, ct);
+        await EnsureSuccess(response, ct);
+        var raw = await response.Content.ReadFromJsonAsync<RawRestartSourceResponse>(ct)
+                  ?? throw new InvalidOperationException("Processing-Gateway returned empty restart-source response");
+        return new RestartSourceQaResponse(raw.Source, raw.TaskId, raw.PreviousStatus, raw.CurrentStatus);
+    }
+
+    public async Task LlmReplayAsync(Guid jobId, CancellationToken ct)
+    {
+        var response = await httpClient.PostAsync($"api/qa/llm/replay/{jobId}", content: null, ct);
+        await EnsureSuccess(response, ct);
+    }
+
+    public async Task<JobBlobList> ListJobBlobsAsync(Guid jobId, CancellationToken ct)
+    {
+        var response = await httpClient.GetAsync($"api/qa/jobs/{jobId}/blobs", ct);
+        await EnsureSuccess(response, ct);
+        var raw = await response.Content.ReadFromJsonAsync<RawJobBlobList>(ct)
+                  ?? throw new InvalidOperationException("Processing-Gateway returned empty blob list");
+        return new JobBlobList(
+            raw.Bucket,
+            raw.Prefix,
+            raw.Count,
+            raw.Items.Select(i => new JobBlobItem(i.Key, i.Size, i.LastModified)).ToList());
+    }
+
+    public async Task<JobBlobContent?> DownloadJobBlobAsync(Guid jobId, string name, CancellationToken ct)
+    {
+        // Stream the body straight through — files can be tens of MB (raw/<source>.json).
+        var response = await httpClient.GetAsync(
+            $"api/qa/jobs/{jobId}/blobs/{name}", HttpCompletionOption.ResponseHeadersRead, ct);
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        await EnsureSuccess(response, ct);
+
+        var stream = await response.Content.ReadAsStreamAsync(ct);
+        var contentType = response.Content.Headers.ContentType?.MediaType ?? "application/octet-stream";
+        var fileName = response.Content.Headers.ContentDisposition?.FileName?.Trim('"');
+        var length = response.Content.Headers.ContentLength;
+        return new JobBlobContent(stream, contentType, fileName, length);
+    }
+
     private static async Task EnsureSuccess(HttpResponseMessage response, CancellationToken ct)
     {
         if (response.IsSuccessStatusCode) return;

@@ -89,26 +89,45 @@ internal sealed class BranchSearchService(
         var expiresAt = now + CacheTtl;
         var result = new Dictionary<string, List<RawItem>>(sourcesToFetch.Length);
 
+        // Upsert: unique index (QueryNormalized, CityNormalized, Source) is enforced regardless
+        // of ExpiresAt — an expired row with the same key still blocks inserts. So we look up
+        // first and update in-place instead of always Add()ing.
+        var existing = await db.SearchCache
+            .Where(c => c.QueryNormalized == queryNorm
+                        && c.CityNormalized == cityNorm
+                        && sourcesToFetch.Contains(c.Source))
+            .ToListAsync(ct);
+        var existingBySource = existing.ToDictionary(e => e.Source);
+
         foreach (var source in sourcesToFetch)
         {
             var items = bySource.TryGetValue(source, out var list) ? list : new List<ParserSearchBranchResult>();
-
-            db.SearchCache.Add(new SearchCacheEntry
+            var resultItems = items.Select(r => new SearchCacheItem
             {
-                QueryNormalized = queryNorm,
-                CityNormalized = cityNorm,
-                Source = source,
-                Results = items.Select(r => new SearchCacheItem
+                ExternalId = r.ExternalId ?? string.Empty,
+                ExternalUrl = r.ExternalUrl ?? string.Empty,
+                Name = r.Name,
+                Address = r.Address,
+                Rating = r.Rating,
+                ReviewCount = r.ReviewCount,
+            }).ToList();
+
+            if (existingBySource.TryGetValue(source, out var current))
+            {
+                current.Results = resultItems;
+                current.ExpiresAt = expiresAt;
+            }
+            else
+            {
+                db.SearchCache.Add(new SearchCacheEntry
                 {
-                    ExternalId = r.ExternalId ?? string.Empty,
-                    ExternalUrl = r.ExternalUrl ?? string.Empty,
-                    Name = r.Name,
-                    Address = r.Address,
-                    Rating = r.Rating,
-                    ReviewCount = r.ReviewCount,
-                }).ToList(),
-                ExpiresAt = expiresAt,
-            });
+                    QueryNormalized = queryNorm,
+                    CityNormalized = cityNorm,
+                    Source = source,
+                    Results = resultItems,
+                    ExpiresAt = expiresAt,
+                });
+            }
 
             result[source] = items
                 .Select(r => new RawItem(source, r.ExternalId, r.ExternalUrl, r.Name, r.Address, r.Rating, r.ReviewCount))
@@ -121,8 +140,13 @@ internal sealed class BranchSearchService(
         }
         catch (DbUpdateException ex)
         {
-            // Race: another request inserted the same (query, city, source). Safe to ignore.
-            logger.LogDebug(ex, "SearchCache insert race for query='{Query}' city='{City}'", query, city);
+            // Race с параллельным запросом, который успел вставить ту же запись между нашим
+            // SELECT и INSERT. Detach все наши SearchCacheEntry — иначе они останутся в
+            // ChangeTracker в Added/Modified и следующий SaveChangesAsync (в PersistCandidatesAsync)
+            // снова попытается их применить и снова упадёт на duplicate key.
+            logger.LogDebug(ex, "SearchCache upsert race for query='{Query}' city='{City}'", query, city);
+            foreach (var entry in db.ChangeTracker.Entries<SearchCacheEntry>().ToList())
+                entry.State = EntityState.Detached;
         }
 
         return result;

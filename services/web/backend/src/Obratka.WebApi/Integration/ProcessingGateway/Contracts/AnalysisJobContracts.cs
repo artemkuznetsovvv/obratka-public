@@ -34,6 +34,69 @@ internal sealed record RawAnalysisJobListResponse(
     [property: JsonPropertyName("offset")] int Offset,
     [property: JsonPropertyName("items")] IReadOnlyList<RawAnalysisJob> Items);
 
+// ----- QA actions: requests in camelCase (PG defaults), responses snake_case from QA controllers -----
+
+public sealed record StartAnalysisBranchSpec(
+    Guid BranchId,
+    string Source,
+    string ExternalId,
+    string ExternalUrl);
+
+public sealed record StartAnalysisQaRequest(
+    Guid CompanyId,
+    DateTimeOffset? DateFrom,
+    DateTimeOffset? DateTo,
+    IReadOnlyList<StartAnalysisBranchSpec> Branches,
+    Guid? AnalysisJobId = null);
+
+internal sealed record RawStartAnalysisResponse(
+    [property: JsonPropertyName("analysisJobId")] Guid AnalysisJobId);
+
+public sealed record StartAnalysisQaResponse(Guid AnalysisJobId);
+
+public sealed record RestartSourceBranchSpec(
+    Guid BranchId,
+    string ExternalId,
+    string ExternalUrl);
+
+public sealed record RestartSourceQaRequest(
+    IReadOnlyList<RestartSourceBranchSpec> Branches,
+    DateTimeOffset? DateFrom,
+    DateTimeOffset? DateTo);
+
+internal sealed record RawRestartSourceResponse(
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("task_id")] Guid TaskId,
+    [property: JsonPropertyName("previous_status")] string PreviousStatus,
+    [property: JsonPropertyName("current_status")] string CurrentStatus);
+
+public sealed record RestartSourceQaResponse(
+    string Source,
+    Guid TaskId,
+    string PreviousStatus,
+    string CurrentStatus);
+
+internal sealed record RawJobBlobItem(
+    [property: JsonPropertyName("key")] string Key,
+    [property: JsonPropertyName("size")] long Size,
+    [property: JsonPropertyName("last_modified")] DateTimeOffset LastModified);
+
+internal sealed record RawJobBlobList(
+    [property: JsonPropertyName("bucket")] string Bucket,
+    [property: JsonPropertyName("prefix")] string Prefix,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("items")] IReadOnlyList<RawJobBlobItem> Items);
+
+public sealed record JobBlobItem(string Key, long Size, DateTimeOffset LastModified);
+
+public sealed record JobBlobList(string Bucket, string Prefix, int Count, IReadOnlyList<JobBlobItem> Items);
+
+public sealed record JobBlobContent(
+    Stream Stream,
+    string ContentType,
+    string? FileName,
+    long? ContentLength);
+
 // ----- Public DTOs (clean camelCase for Web API response to frontend) -----
 
 public sealed record AnalysisJobDto(
