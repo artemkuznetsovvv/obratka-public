@@ -18,4 +18,5 @@ public interface IParserServiceClient
     Task<ParserCollectionTaskStatusResponse> GetTaskStatusAsync(Guid taskId, CancellationToken ct);
     Task<CreateParserCollectionTaskResponse> CreateTaskAsync(
         CreateParserCollectionTaskRequest request, CancellationToken ct);
+    Task<ParserSearchResponse> SearchAsync(ParserSearchRequest request, CancellationToken ct);
 }

@@ -1,7 +1,11 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Obratka.WebApi.Auth;
+using Obratka.WebApi.Companies;
+using Obratka.WebApi.Geo;
 
 namespace Obratka.WebApi.Data;
 
@@ -9,6 +13,10 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
     : IdentityDbContext<ApplicationUser, IdentityRole<Guid>, Guid>(options)
 {
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<Company> Companies => Set<Company>();
+    public DbSet<CompanyBranch> CompanyBranches => Set<CompanyBranch>();
+    public DbSet<SearchCacheEntry> SearchCache => Set<SearchCacheEntry>();
+    public DbSet<CityReference> Cities => Set<CityReference>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -26,5 +34,76 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
                 .HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
+
+        builder.Entity<Company>(b =>
+        {
+            b.ToTable("companies");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            b.Property(x => x.Category).HasMaxLength(100);
+            b.Property(x => x.Subcategory).HasMaxLength(100);
+            b.Property(x => x.Description).HasMaxLength(4000);
+            b.Property(x => x.Cities).HasColumnType("text[]");
+            b.HasIndex(x => x.OwnerUserId);
+            b.HasOne<ApplicationUser>()
+                .WithMany()
+                .HasForeignKey(x => x.OwnerUserId)
+                .OnDelete(DeleteBehavior.Cascade);
+            b.HasMany(x => x.Branches)
+                .WithOne()
+                .HasForeignKey(x => x.CompanyId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<CompanyBranch>(b =>
+        {
+            b.ToTable("company_branches");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Source).HasMaxLength(32).IsRequired();
+            b.Property(x => x.ExternalId).HasMaxLength(256).IsRequired();
+            b.Property(x => x.ExternalUrl).HasMaxLength(1024);
+            b.Property(x => x.Name).HasMaxLength(500).IsRequired();
+            b.Property(x => x.Address).HasMaxLength(1024);
+            b.Property(x => x.City).HasMaxLength(200).IsRequired();
+            b.HasIndex(x => x.CompanyId);
+            // Partial unique index: only enforce when ExternalId is non-empty.
+            // Parser plugins sometimes return null/empty externalId — those rows must coexist.
+            b.HasIndex(x => new { x.CompanyId, x.Source, x.ExternalId })
+                .IsUnique()
+                .HasFilter("\"ExternalId\" <> ''");
+        });
+
+        builder.Entity<CityReference>(b =>
+        {
+            b.ToTable("city_reference");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            b.Property(x => x.NameNormalized).HasMaxLength(200).IsRequired();
+            b.Property(x => x.Region).HasMaxLength(200).IsRequired();
+            b.HasIndex(x => x.NameNormalized);
+            b.HasIndex(x => new { x.Name, x.Region }).IsUnique();
+        });
+
+        builder.Entity<SearchCacheEntry>(b =>
+        {
+            b.ToTable("search_cache");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.QueryNormalized).HasMaxLength(500).IsRequired();
+            b.Property(x => x.CityNormalized).HasMaxLength(200).IsRequired();
+            b.Property(x => x.Source).HasMaxLength(32).IsRequired();
+            b.Property(x => x.Results)
+                .HasColumnType("jsonb")
+                .HasConversion(
+                    v => JsonSerializer.Serialize(v, JsonOptions),
+                    v => JsonSerializer.Deserialize<List<SearchCacheItem>>(v, JsonOptions) ?? new(),
+                    new ValueComparer<List<SearchCacheItem>>(
+                        (a, b) => ReferenceEquals(a, b),
+                        v => v == null ? 0 : v.Count,
+                        v => v));
+            b.HasIndex(x => new { x.QueryNormalized, x.CityNormalized, x.Source }).IsUnique();
+            b.HasIndex(x => x.ExpiresAt);
+        });
     }
+
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 }

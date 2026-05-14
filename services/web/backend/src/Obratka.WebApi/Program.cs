@@ -7,6 +7,7 @@ using Obratka.Modules.Analytics;
 using Obratka.Modules.Notifications;
 using Obratka.Modules.Reports;
 using Obratka.WebApi.Auth;
+using Obratka.WebApi.Companies;
 using Obratka.WebApi.Data;
 using Obratka.WebApi.Integration.ParserService;
 using Obratka.WebApi.Integration.ProcessingGateway;
@@ -105,6 +106,7 @@ builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IRefreshTokenStore, RefreshTokenStore>();
 builder.Services.AddScoped<RefreshCookie>();
 builder.Services.AddScoped<DbInitializer>();
+builder.Services.AddScoped<IBranchSearchService, BranchSearchService>();
 
 builder.Services.AddAnalyticsModule();
 builder.Services.AddReportsModule();

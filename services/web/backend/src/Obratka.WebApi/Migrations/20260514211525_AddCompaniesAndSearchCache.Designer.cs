@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Obratka.WebApi.Data;
@@ -12,9 +13,11 @@ using Obratka.WebApi.Data;
 namespace Obratka.WebApi.Migrations
 {
     [DbContext(typeof(WebApiDbContext))]
-    partial class WebApiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260514211525_AddCompaniesAndSearchCache")]
+    partial class AddCompaniesAndSearchCache
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -334,11 +337,9 @@ namespace Obratka.WebApi.Migrations
                         .HasColumnType("character varying(256)");
 
                     b.Property<string>("ExternalUrl")
+                        .IsRequired()
                         .HasMaxLength(1024)
                         .HasColumnType("character varying(1024)");
-
-                    b.Property<bool>("IsSelected")
-                        .HasColumnType("boolean");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -361,8 +362,7 @@ namespace Obratka.WebApi.Migrations
                     b.HasIndex("CompanyId");
 
                     b.HasIndex("CompanyId", "Source", "ExternalId")
-                        .IsUnique()
-                        .HasFilter("\"ExternalId\" <> ''");
+                        .IsUnique();
 
                     b.ToTable("company_branches", (string)null);
                 });
@@ -406,39 +406,6 @@ namespace Obratka.WebApi.Migrations
                         .IsUnique();
 
                     b.ToTable("search_cache", (string)null);
-                });
-
-            modelBuilder.Entity("Obratka.WebApi.Geo.CityReference", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<string>("NameNormalized")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<string>("Region")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("NameNormalized");
-
-                    b.HasIndex("Name", "Region")
-                        .IsUnique();
-
-                    b.ToTable("city_reference", (string)null);
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<System.Guid>", b =>

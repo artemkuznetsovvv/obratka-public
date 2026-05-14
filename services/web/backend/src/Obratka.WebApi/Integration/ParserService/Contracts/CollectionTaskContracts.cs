@@ -39,3 +39,16 @@ public sealed record CreateParserCollectionTaskRequest(
     List<ParserBranchTarget> Branches);
 
 public sealed record CreateParserCollectionTaskResponse(Guid TaskId);
+
+public sealed record ParserSearchRequest(string Query, string? City, string[] Sources);
+
+public sealed record ParserSearchBranchResult(
+    string Source,
+    string ExternalId,
+    string ExternalUrl,
+    string Name,
+    string Address,
+    double? Rating,
+    int? ReviewCount);
+
+public sealed record ParserSearchResponse(IReadOnlyList<ParserSearchBranchResult> Results);
