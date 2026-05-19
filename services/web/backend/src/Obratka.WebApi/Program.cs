@@ -12,6 +12,7 @@ using Obratka.WebApi.Data;
 using Obratka.WebApi.Integration.ParserService;
 using Obratka.WebApi.Integration.ProcessingGateway;
 using Serilog;
+using Serilog.Events;
 
 const string FrontendCorsPolicy = "FrontendDev";
 
@@ -165,7 +166,15 @@ if (app.Environment.IsDevelopment())
     app.UseCors(FrontendCorsPolicy);
 }
 
-app.UseSerilogRequestLogging();
+app.UseSerilogRequestLogging(options =>
+{
+    options.GetLevel = (httpContext, elapsed, ex) =>
+        ex != null || httpContext.Response.StatusCode >= 500
+            ? LogEventLevel.Error
+            : httpContext.Response.StatusCode >= 400
+                ? LogEventLevel.Warning
+                : LogEventLevel.Debug;
+});
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
