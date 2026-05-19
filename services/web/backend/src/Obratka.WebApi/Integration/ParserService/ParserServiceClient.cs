@@ -45,6 +45,14 @@ internal sealed class ParserServiceClient(HttpClient httpClient) : IParserServic
     public Task<ParserProxyDto> ResetProxyHealthAsync(int id, CancellationToken ct)
         => PostProxyAction("api/proxies/reset-health", id, ct);
 
+    public async Task<ParserProxyDto> SetProxyExpiresAtAsync(int id, DateTimeOffset? expiresAt, CancellationToken ct)
+    {
+        var payload = new SetParserProxyExpiresAtPayload(id, expiresAt);
+        var response = await httpClient.PostAsJsonAsync("api/proxies/set-expires-at", payload, JsonOptions, ct);
+        await EnsureSuccess(response, ct);
+        return (await response.Content.ReadFromJsonAsync<ParserProxyDto>(JsonOptions, ct))!;
+    }
+
     public async Task<ParserCollectionTaskListResponse> ListTasksAsync(
         string? status, string? source, int? limit, int? offset, CancellationToken ct)
     {

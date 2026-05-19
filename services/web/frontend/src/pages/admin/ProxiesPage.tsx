@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Pause, Play, Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { CalendarClock, Check, Pause, Pencil, Play, Plus, RotateCcw, Trash2, X } from 'lucide-react'
 import { AppLayout } from '@/layouts/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -20,11 +20,25 @@ const proxySchema = z.object({
   username: z.string().optional(),
   password: z.string().optional(),
   notes: z.string().optional(),
+  expiresAt: z.string().optional(),
 })
+
+// <input type="datetime-local"> отдаёт "YYYY-MM-DDTHH:mm" без таймзоны, трактуется как local.
+// Конвертация туда-обратно с ISO-строкой (UTC), которую возвращает/принимает API.
+const toLocalInput = (iso: string | null): string => {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+const fromLocalInput = (s: string): string | null => (s ? new Date(s).toISOString() : null)
+const isExpired = (iso: string | null) => iso !== null && new Date(iso) <= new Date()
 
 export default function ProxiesPage() {
   const queryClient = useQueryClient()
   const [showAdd, setShowAdd] = useState(false)
+  const [editingExpiresId, setEditingExpiresId] = useState<number | null>(null)
+  const [editingExpiresValue, setEditingExpiresValue] = useState('')
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['admin', 'proxies'],
@@ -44,6 +58,23 @@ export default function ProxiesPage() {
   const disable = useMutation({ mutationFn: (id: number) => adminProxiesApi.disable(id), onSuccess: invalidate })
   const enable = useMutation({ mutationFn: (id: number) => adminProxiesApi.enable(id), onSuccess: invalidate })
   const resetHealth = useMutation({ mutationFn: (id: number) => adminProxiesApi.resetHealth(id), onSuccess: invalidate })
+  const setExpires = useMutation({
+    mutationFn: ({ id, expiresAt }: { id: number; expiresAt: string | null }) =>
+      adminProxiesApi.setExpiresAt(id, expiresAt),
+    onSuccess: () => {
+      invalidate()
+      setEditingExpiresId(null)
+    },
+  })
+
+  const startEditExpires = (id: number, current: string | null) => {
+    setEditingExpiresId(id)
+    setEditingExpiresValue(toLocalInput(current))
+  }
+  const cancelEditExpires = () => setEditingExpiresId(null)
+  const saveEditExpires = (id: number) => {
+    setExpires.mutate({ id, expiresAt: fromLocalInput(editingExpiresValue) })
+  }
 
   return (
     <AppLayout breadcrumbs={[{ label: 'Админ' }, { label: 'Прокси' }]}>
@@ -87,6 +118,7 @@ export default function ProxiesPage() {
                 <TableHead>Статус</TableHead>
                 <TableHead>Сбои</TableHead>
                 <TableHead>Cooldown</TableHead>
+                <TableHead>Окончание срока действия</TableHead>
                 <TableHead>Заметки</TableHead>
                 <TableHead className="text-right">Действия</TableHead>
               </TableRow>
@@ -94,7 +126,7 @@ export default function ProxiesPage() {
             <TableBody>
               {data.items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-text-secondary py-12">
+                  <TableCell colSpan={9} className="text-center text-text-secondary py-12">
                     Прокси не настроены
                   </TableCell>
                 </TableRow>
@@ -114,8 +146,52 @@ export default function ProxiesPage() {
                   <TableCell className="text-text-secondary">
                     {p.cooldownUntil ? new Date(p.cooldownUntil).toLocaleString('ru-RU') : '—'}
                   </TableCell>
+                  <TableCell className="text-text-secondary">
+                    {editingExpiresId === p.id ? (
+                      <div className="flex items-center gap-1">
+                        <Input
+                          type="datetime-local"
+                          value={editingExpiresValue}
+                          onChange={(e) => setEditingExpiresValue(e.target.value)}
+                          className="h-8 w-44"
+                          autoFocus
+                        />
+                        <Button
+                          size="icon"
+                          variant="outline"
+                          onClick={() => saveEditExpires(p.id)}
+                          disabled={setExpires.isPending}
+                          title="Сохранить"
+                        >
+                          <Check size={14} />
+                        </Button>
+                        <Button size="icon" variant="outline" onClick={cancelEditExpires} title="Отмена">
+                          <X size={14} />
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        {p.expiresAt ? (
+                          <span className={isExpired(p.expiresAt) ? 'text-destructive' : ''}>
+                            {new Date(p.expiresAt).toLocaleString('ru-RU')}
+                          </span>
+                        ) : (
+                          <span>—</span>
+                        )}
+                        {isExpired(p.expiresAt) && <Badge variant="destructive">Истёк</Badge>}
+                      </div>
+                    )}
+                  </TableCell>
                   <TableCell className="text-text-secondary max-w-xs truncate">{p.notes || '—'}</TableCell>
                   <TableCell className="text-right space-x-1 whitespace-nowrap">
+                    <Button
+                      size="icon"
+                      variant="outline"
+                      onClick={() => startEditExpires(p.id, p.expiresAt)}
+                      title="Изменить срок действия"
+                    >
+                      {p.expiresAt ? <Pencil size={14} /> : <CalendarClock size={14} />}
+                    </Button>
                     {p.enabled ? (
                       <Button size="icon" variant="outline" onClick={() => disable.mutate(p.id)} title="Выключить">
                         <Pause size={14} />
@@ -178,6 +254,7 @@ function AddProxyForm({ onSubmit, isSubmitting, submitError }: AddProxyFormProps
           username: values.username || null,
           password: values.password || null,
           notes: values.notes || null,
+          expiresAt: fromLocalInput(values.expiresAt ?? ''),
         }),
       )}
       className="grid grid-cols-1 gap-4 md:grid-cols-3"
@@ -206,6 +283,9 @@ function AddProxyForm({ onSubmit, isSubmitting, submitError }: AddProxyFormProps
       </FormField>
       <FormField label="Заметки (опц.)" error={errors.notes?.message}>
         <Input placeholder="мобильный МТС" {...register('notes')} />
+      </FormField>
+      <FormField label="Окончание срока действия (опц.)" error={errors.expiresAt?.message}>
+        <Input type="datetime-local" {...register('expiresAt')} />
       </FormField>
       <div className="md:col-span-3 flex items-center justify-end gap-3">
         {submitError && <p className="text-sm text-destructive mr-auto">{submitError}</p>}

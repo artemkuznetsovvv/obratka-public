@@ -43,4 +43,12 @@ public sealed class AdminProxiesController(IParserServiceClient parser) : Contro
     [HttpPost("{id:int}/reset-health")]
     [ProducesResponseType(typeof(ParserProxyDto), StatusCodes.Status200OK)]
     public Task<ParserProxyDto> ResetHealth(int id, CancellationToken ct) => parser.ResetProxyHealthAsync(id, ct);
+
+    [HttpPost("{id:int}/set-expires-at")]
+    [ProducesResponseType(typeof(ParserProxyDto), StatusCodes.Status200OK)]
+    public Task<ParserProxyDto> SetExpiresAt(
+        int id,
+        [FromBody] SetParserProxyExpiresAtRequest request,
+        CancellationToken ct)
+        => parser.SetProxyExpiresAtAsync(id, request.ExpiresAt, ct);
 }

@@ -37,6 +37,7 @@ export interface ParserProxy {
   failureCount: number
   cooldownUntil: string | null
   lastUsedAt: string | null
+  expiresAt: string | null
   notes: string | null
   createdAt: string
   updatedAt: string
@@ -55,6 +56,7 @@ export interface CreateParserProxyRequest {
   password?: string | null
   notes?: string | null
   enabled?: boolean | null
+  expiresAt?: string | null
 }
 
 export const adminProxiesApi = {
@@ -78,6 +80,11 @@ export const adminProxiesApi = {
 
   resetHealth: (id: number) =>
     http.post<ParserProxy>(`/api/admin/proxies/${id}/reset-health`).then((r) => r.data),
+
+  setExpiresAt: (id: number, expiresAt: string | null) =>
+    http
+      .post<ParserProxy>(`/api/admin/proxies/${id}/set-expires-at`, { expiresAt })
+      .then((r) => r.data),
 }
 
 // ----- Parser tasks -----

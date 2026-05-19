@@ -11,6 +11,7 @@ public interface IParserServiceClient
     Task<ParserProxyDto> DisableProxyAsync(int id, CancellationToken ct);
     Task<ParserProxyDto> EnableProxyAsync(int id, CancellationToken ct);
     Task<ParserProxyDto> ResetProxyHealthAsync(int id, CancellationToken ct);
+    Task<ParserProxyDto> SetProxyExpiresAtAsync(int id, DateTimeOffset? expiresAt, CancellationToken ct);
 
     // Collection tasks
     Task<ParserCollectionTaskListResponse> ListTasksAsync(

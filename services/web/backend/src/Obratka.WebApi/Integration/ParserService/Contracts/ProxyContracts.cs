@@ -10,6 +10,7 @@ public sealed record ParserProxyDto(
     int FailureCount,
     DateTimeOffset? CooldownUntil,
     DateTimeOffset? LastUsedAt,
+    DateTimeOffset? ExpiresAt,
     string? Notes,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
@@ -23,6 +24,11 @@ public sealed record CreateParserProxyRequest(
     string? Username,
     string? Password,
     string? Notes,
-    bool? Enabled);
+    bool? Enabled,
+    DateTimeOffset? ExpiresAt);
 
 public sealed record ParserProxyIdRequest(int Id);
+
+public sealed record SetParserProxyExpiresAtRequest(DateTimeOffset? ExpiresAt);
+
+internal sealed record SetParserProxyExpiresAtPayload(int Id, DateTimeOffset? ExpiresAt);
