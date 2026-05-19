@@ -9,6 +9,7 @@ public interface IProxyRepository
     Task<ProxyEntity> AddAsync(ProxyEntity entity, CancellationToken ct);
     Task DeleteAsync(int id, CancellationToken ct);
     Task SetEnabledAsync(int id, bool enabled, CancellationToken ct);
+    Task SetExpiresAtAsync(int id, DateTimeOffset? expiresAt, CancellationToken ct);
     Task ResetHealthAsync(int id, CancellationToken ct);
     Task RecordFailureAsync(int id, DateTimeOffset? cooldownUntil, CancellationToken ct);
     Task TouchLastUsedAsync(int id, CancellationToken ct);

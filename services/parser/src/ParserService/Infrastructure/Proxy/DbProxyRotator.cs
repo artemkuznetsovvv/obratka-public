@@ -46,7 +46,12 @@ public class DbProxyRotator : IProxyRotator
         }
 
         var now = DateTimeOffset.UtcNow;
-        var available = entries
+        var notExpired = entries
+            .Where(e => e.ExpiresAt is null || e.ExpiresAt > now)
+            .ToList();
+        var expiredCount = entries.Count - notExpired.Count;
+
+        var available = notExpired
             .Where(e => e.CooldownUntil is null || e.CooldownUntil <= now)
             .Where(e => exclude is null || !exclude.Any(x => SameProxy(x, e)))
             .ToList();
@@ -55,10 +60,12 @@ public class DbProxyRotator : IProxyRotator
         {
             if (exclude is { Count: > 0 })
                 _logger.LogWarning(
-                    "No fresh proxies for {Source}: total={Total}, excluded={Excluded}, all others on cooldown",
-                    source, entries.Count, exclude.Count);
+                    "No fresh proxies for {Source}: total={Total}, expired={Expired}, excluded={Excluded}, all others on cooldown",
+                    source, entries.Count, expiredCount, exclude.Count);
             else
-                _logger.LogWarning("All {Count} enabled proxies on cooldown for {Source}", entries.Count, source);
+                _logger.LogWarning(
+                    "No usable proxies for {Source}: total={Total}, expired={Expired}, others on cooldown",
+                    source, entries.Count, expiredCount);
             return null;
         }
 

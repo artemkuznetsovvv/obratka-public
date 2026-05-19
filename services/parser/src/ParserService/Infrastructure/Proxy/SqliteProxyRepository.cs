@@ -51,6 +51,15 @@ public class SqliteProxyRepository : IProxyRepository
         await _db.SaveChangesAsync(ct);
     }
 
+    public async Task SetExpiresAtAsync(int id, DateTimeOffset? expiresAt, CancellationToken ct)
+    {
+        var entity = await _db.Proxies.FindAsync([id], ct);
+        if (entity is null) return;
+        entity.ExpiresAt = expiresAt;
+        entity.UpdatedAt = DateTimeOffset.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
+
     public async Task ResetHealthAsync(int id, CancellationToken ct)
     {
         var entity = await _db.Proxies.FindAsync([id], ct);

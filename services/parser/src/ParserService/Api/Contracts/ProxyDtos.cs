@@ -7,9 +7,12 @@ public record CreateProxyRequest(
     string? Username,
     string? Password,
     string? Notes,
-    bool? Enabled);
+    bool? Enabled,
+    DateTimeOffset? ExpiresAt);
 
 public record ProxyIdRequest(int Id);
+
+public record SetProxyExpiresAtRequest(int Id, DateTimeOffset? ExpiresAt);
 
 public record ProxyDto(
     int Id,
@@ -21,6 +24,7 @@ public record ProxyDto(
     int FailureCount,
     DateTimeOffset? CooldownUntil,
     DateTimeOffset? LastUsedAt,
+    DateTimeOffset? ExpiresAt,
     string? Notes,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);

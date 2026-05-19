@@ -12,6 +12,7 @@ public class ProxyEntity
     public int FailureCount { get; set; }
     public DateTimeOffset? CooldownUntil { get; set; }
     public DateTimeOffset? LastUsedAt { get; set; }
+    public DateTimeOffset? ExpiresAt { get; set; }
     public string? Notes { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }

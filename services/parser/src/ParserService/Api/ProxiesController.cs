@@ -54,7 +54,8 @@ public class ProxiesController : ControllerBase
             Username = string.IsNullOrEmpty(request.Username) ? null : request.Username,
             Password = string.IsNullOrEmpty(request.Password) ? null : request.Password,
             Notes = request.Notes,
-            Enabled = request.Enabled ?? true
+            Enabled = request.Enabled ?? true,
+            ExpiresAt = request.ExpiresAt
         };
 
         try
@@ -121,8 +122,25 @@ public class ProxiesController : ControllerBase
         return Ok(ToDto(updated!));
     }
 
+    [HttpPost("set-expires-at")]
+    [ProducesResponseType(typeof(ProxyDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ProxyDto>> SetExpiresAt(
+        [FromBody] SetProxyExpiresAtRequest request,
+        CancellationToken ct)
+    {
+        var entity = await _repository.GetByIdAsync(request.Id, ct);
+        if (entity is null) return NotFound();
+        await _repository.SetExpiresAtAsync(request.Id, request.ExpiresAt, ct);
+        _logger.LogInformation(
+            "Proxy {Id} expires_at set to {ExpiresAt} ({Host}:{Port})",
+            request.Id, request.ExpiresAt, entity.Host, entity.Port);
+        var updated = await _repository.GetByIdAsync(request.Id, ct);
+        return Ok(ToDto(updated!));
+    }
+
     private static ProxyDto ToDto(ProxyEntity e) => new(
         e.Id, e.Host, e.Port, e.Protocol, e.Username, e.Enabled,
-        e.FailureCount, e.CooldownUntil, e.LastUsedAt, e.Notes,
+        e.FailureCount, e.CooldownUntil, e.LastUsedAt, e.ExpiresAt, e.Notes,
         e.CreatedAt, e.UpdatedAt);
 }
