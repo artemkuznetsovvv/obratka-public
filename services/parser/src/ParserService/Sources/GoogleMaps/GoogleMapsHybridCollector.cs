@@ -38,6 +38,12 @@ internal sealed class GoogleMapsHybridCollector
         int totalBatches = 0;
         int finalAttempt = 0;
 
+        // Канарейки отказоустойчивости: считаем сколько batchexecute-ответов прошло
+        // URL-фильтр и сколько из них реально дало ListUgcPosts-фреймы. Если ответы есть,
+        // а фреймов 0 — Google поменял RPC-имя или формат wrapper'а.
+        int matchedUrlCount = 0;
+        int extractedFramesCount = 0;
+
         var page = await browserContext.NewPageAsync();
         try
         {
@@ -55,7 +61,11 @@ internal sealed class GoogleMapsHybridCollector
                 if (!response.Url.Contains("/MapsWizUi/data/batchexecute")) return;
                 if (response.Status != 200) return;
 
-                _ = CaptureResponseAsync(response, interceptedBatch);
+                Interlocked.Increment(ref matchedUrlCount);
+                _ = CaptureResponseAsync(
+                    response,
+                    interceptedBatch,
+                    framesFound: n => Interlocked.Add(ref extractedFramesCount, n));
             };
             _logger.LogDebug("[GMaps-Hybrid] Перехват batchexecute настроен");
 
@@ -222,6 +232,47 @@ internal sealed class GoogleMapsHybridCollector
                     _options.MaxScrollAttempts);
             }
 
+            // --- Канарейки отказоустойчивости (см. doc-комментарий в начале файла) ---
+            // Проверяем ПЕРЕД return-ом нормального пути. При OperationCanceledException
+            // мы сюда не доходим — отмена это валидный частичный сбор, не поломка парсера.
+
+            // Канарейка №1: schema drift. Мы перехватили batchexecute-ответы, но ни в одном
+            // не нашли фреймов ListUgcPosts. Самая частая причина — Google переименовал RPC.
+            if (matchedUrlCount > 0 && extractedFramesCount == 0)
+            {
+                _logger.LogError(
+                    "[GMaps-Hybrid] SCHEMA DRIFT: перехвачено {Matched} batchexecute-ответов, " +
+                    "но ни одного фрейма ListUgcPosts не извлечено. Google вероятно переименовал " +
+                    "RPC или поменял wrapper — проверь GoogleMapsResponseParser.ExtractListUgcPostsFrames.",
+                    matchedUrlCount);
+            }
+
+            // Канарейка №2: «DOM знает про отзывы, а pipeline их не увидел».
+            // seenIds.Count = сколько ВСЕГО уникальных review_id мы вытащили из batches до
+            // применения date-фильтра. Если DOM не пуст, а seenIds == 0 — pipeline сломан
+            // (либо перехват, либо парсинг). Это, например, поймало бы текущую поломку
+            // мгновенно вместо тихого «0 отзывов».
+            int domReviewCount = 0;
+            try
+            {
+                domReviewCount = await page.EvaluateAsync<int>(
+                    "() => document.querySelectorAll('[data-review-id]').length");
+            }
+            catch (Exception ex)
+            {
+                // Страница могла закрыться или редиректнуться — не падаем, канарейка best-effort.
+                _logger.LogDebug(ex, "[GMaps-Hybrid] DOM-канарейка: не удалось посчитать [data-review-id]");
+            }
+
+            if (domReviewCount > 0 && seenIds.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    $"GMaps-Hybrid канарейка сработала для {branch.ExternalId}: в DOM {domReviewCount} " +
+                    $"отзывов, pipeline собрал 0 уникальных. matchedUrls={matchedUrlCount}, " +
+                    $"extractedFrames={extractedFramesCount}. Подозрение на изменение API Google " +
+                    $"(URL-фильтр или формат ответа).");
+            }
+
             return reviews;
         }
         catch (OperationCanceledException)
@@ -241,9 +292,11 @@ internal sealed class GoogleMapsHybridCollector
             // исключении. Раньше «Сбор завершён» был внутри try после цикла и при exception
             // не выполнялся → пользователь не видел сколько собралось.
             _logger.LogInformation(
-                "[GMaps-Hybrid] Итог сбора: {ExternalId}, {Count} отзывов (уникальных: {Unique}), батчей: {Batches}, дублей отброшено: {Dup}, скроллов: {Scrolls}/{MaxScrolls}",
+                "[GMaps-Hybrid] Итог сбора: {ExternalId}, {Count} отзывов (уникальных: {Unique}), " +
+                "батчей: {Batches}, дублей отброшено: {Dup}, скроллов: {Scrolls}/{MaxScrolls}, " +
+                "matchedUrls={MatchedUrls}, extractedFrames={ExtractedFrames}",
                 branch.ExternalId, reviews.Count, seenIds.Count, totalBatches, totalDuplicates,
-                finalAttempt, _options.MaxScrollAttempts);
+                finalAttempt, _options.MaxScrollAttempts, matchedUrlCount, extractedFramesCount);
 
             await page.CloseAsync();
         }
@@ -251,7 +304,8 @@ internal sealed class GoogleMapsHybridCollector
 
     private async Task CaptureResponseAsync(
         IResponse response,
-        ConcurrentQueue<IReadOnlyList<GoogleMapsReviewDto>> queue)
+        ConcurrentQueue<IReadOnlyList<GoogleMapsReviewDto>> queue,
+        Action<int>? framesFound = null)
     {
         try
         {
@@ -264,6 +318,8 @@ internal sealed class GoogleMapsHybridCollector
                 // Не наш RPC внутри batchexecute (например, чисто T4jwAf / r4skrb для фоток/деталей) — норма, не лог.
                 return;
             }
+
+            framesFound?.Invoke(frames.Count);
 
             _logger.LogDebug(
                 "[GMaps-Hybrid] Перехвачен batchexecute с ListUgcPosts ({Length} байт, {Frames} фреймов)",
