@@ -45,14 +45,19 @@ internal sealed class GoogleMapsHybridCollector
                 branch.ExternalId, placeUrl);
 
             // --- Set up API response interception ---
+            // Май 2026: Google перевёл листинг отзывов с GET /maps/rpc/listugcposts на
+            // POST /maps/_/MapsWizUi/data/batchexecute (стандартный batchexecute RPC).
+            // RPC-имя внутри ответа стабильно: /MapsUgcPostService.ListUgcPosts.
+            // Один POST может содержать несколько RPC — фильтрация по содержимому делается
+            // на этапе ExtractListUgcPostsFrames (отсекает соседние rpcids в том же запросе).
             page.Response += (_, response) =>
             {
-                if (!response.Url.Contains("/maps/rpc/listugcposts")) return;
+                if (!response.Url.Contains("/MapsWizUi/data/batchexecute")) return;
                 if (response.Status != 200) return;
 
                 _ = CaptureResponseAsync(response, interceptedBatch);
             };
-            _logger.LogDebug("[GMaps-Hybrid] Перехват listugcposts настроен");
+            _logger.LogDebug("[GMaps-Hybrid] Перехват batchexecute настроен");
 
             // --- Navigate to place page ---
             await page.GotoAsync(placeUrl, new PageGotoOptions
@@ -250,21 +255,33 @@ internal sealed class GoogleMapsHybridCollector
     {
         try
         {
-            var body = await response.TextAsync();
-            _logger.LogDebug("[GMaps-Hybrid] Перехвачен listugcposts ответ ({Length} байт)", body.Length);
-
-            var root = GoogleMapsResponseParser.Parse(body);
-            var reviews = GoogleMapsResponseParser.GetReviews(root);
-
-            if (reviews.Count > 0)
+            // BodyAsync() — НЕ TextAsync(): chunk-длины внутри batchexecute считаются в БАЙТАХ UTF-8.
+            // Кириллица в отзывах ломает любой подсчёт по char-ам.
+            var body = await response.BodyAsync();
+            var frames = GoogleMapsResponseParser.ExtractListUgcPostsFrames(body);
+            if (frames.Count == 0)
             {
-                queue.Enqueue(reviews);
-                _logger.LogDebug("[GMaps-Hybrid] Распарсено: {Count} отзывов", reviews.Count);
+                // Не наш RPC внутри batchexecute (например, чисто T4jwAf / r4skrb для фоток/деталей) — норма, не лог.
+                return;
+            }
+
+            _logger.LogDebug(
+                "[GMaps-Hybrid] Перехвачен batchexecute с ListUgcPosts ({Length} байт, {Frames} фреймов)",
+                body.Length, frames.Count);
+
+            foreach (var root in frames)
+            {
+                var reviews = GoogleMapsResponseParser.GetReviews(root);
+                if (reviews.Count > 0)
+                {
+                    queue.Enqueue(reviews);
+                    _logger.LogDebug("[GMaps-Hybrid] Распарсено: {Count} отзывов", reviews.Count);
+                }
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[GMaps-Hybrid] Ошибка парсинга listugcposts ответа");
+            _logger.LogWarning(ex, "[GMaps-Hybrid] Ошибка парсинга batchexecute/ListUgcPosts ответа");
         }
     }
 

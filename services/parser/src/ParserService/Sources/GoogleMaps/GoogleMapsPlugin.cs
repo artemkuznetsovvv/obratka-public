@@ -333,14 +333,16 @@ public class GoogleMapsPlugin : IReviewSourcePlugin
                         const rMatch = label.match(/([\d]+[,.][\d]+)/);
                         if (rMatch) rating = parseFloat(rMatch[1].replace(',', '.'));
                     }
-                    const allBtns = document.querySelectorAll('button');
-                    for (const btn of allBtns) {
-                        const label = btn.getAttribute('aria-label') || btn.textContent || '';
-                        const m = label.match(/(?:отзыв|review)[^\d]*\(?([\d\s,.]+)\)?/i)
-                            || label.match(/\(([\d\s,.]+)\)\s*$/);
+                    // Число отзывов: Google сейчас держит его в span[role="img"][aria-label="N отзывов" / "N reviews"]
+                    // рядом с h1 (раньше — на <button>, поэтому старый перебор button-ов промахивался).
+                    const reviewCountEl = document.querySelector(
+                        '[role="img"][aria-label*="отзыв"], [role="img"][aria-label*="review" i]');
+                    if (reviewCountEl) {
+                        const rcLabel = reviewCountEl.getAttribute('aria-label') || '';
+                        const m = rcLabel.match(/([\d\s,.]+)/);
                         if (m) {
-                            reviewCount = parseInt(m[1].replace(/[\s,.]/g, ''));
-                            if (reviewCount > 0) break;
+                            const n = parseInt(m[1].replace(/[\s,.]/g, ''));
+                            if (!isNaN(n) && n > 0) reviewCount = n;
                         }
                     }
 
