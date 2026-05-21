@@ -49,3 +49,11 @@ build/
 .DS_Store
 .idea/
 .vscode/
+.claude/
+
+# Локальные артефакты пайплайна (входы тестовых прогонов, выходы анализа,
+# QA-дампы). Не должны попадать ни в git, ни в docker-image (см. .dockerignore).
+out/
+qa_outputs/
+input*.json
+llm_response.json
