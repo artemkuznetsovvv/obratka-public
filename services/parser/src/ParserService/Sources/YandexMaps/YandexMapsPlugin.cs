@@ -303,6 +303,12 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
                         const ratingEl = li.querySelector('.business-rating-badge-view__rating-text');
                         const rating = ratingEl ? (ratingEl.textContent || '').trim() : null;
 
+                        // ВАЖНО: в search-list карточке Яндекса виден ТОЛЬКО счётчик «N оценок»
+                        // (.business-rating-with-text-view__count). Это число оценок (rating votes),
+                        // НЕ число отзывов с текстом — настоящее число отзывов в карточке поиска
+                        // не показывается. Кладём это значение в ReviewCount (исторический контракт
+                        // «число рядом с рейтингом»). RealReviewsCount остаётся null — точный
+                        // отзыв-каунт доступен только на странице организации.
                         const countEl = li.querySelector('.business-rating-with-text-view__count');
                         const reviewCountRaw = countEl ? (countEl.textContent || '').trim() : null;
 
@@ -370,15 +376,24 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
                 const ratingEl = document.querySelector('.business-rating-badge-view__rating-text');
                 const rating = ratingEl ? (ratingEl.textContent || '').trim() : null;
 
+                // ReviewCount — берём из шапки рейтинга («N оценок» — это рейтинг-каунт,
+                // НЕ отзыв-каунт). Поле сохранено как ReviewCount по историческому контракту.
                 const countEl = document.querySelector('.business-rating-amount-view')
                     || document.querySelector('.business-header-rating-view__text');
                 const reviewCountRaw = countEl ? (countEl.textContent || '').trim() : null;
+
+                // RealReviewsCount — из бейджа таба «Отзывы». Класс ._name_reviews стабилен:
+                // текст вида "Отзывы306", где 306 = настоящее число отзывов с текстом
+                // (см. скриншот Скай8: 699 оценок vs 306 отзывов).
+                const reviewsTab = document.querySelector('.tabs-select-view__title._name_reviews')
+                    || document.querySelector('[class*="_name_reviews"]');
+                const realReviewsCountRaw = reviewsTab ? (reviewsTab.textContent || '').trim() : null;
 
                 const addrEl = document.querySelector('a[href*="/house/"]')
                     || document.querySelector('.business-contacts-view__address');
                 const address = addrEl ? (addrEl.textContent || '').trim() : '';
 
-                return JSON.stringify({ name, rating, reviewCountRaw, address });
+                return JSON.stringify({ name, rating, reviewCountRaw, realReviewsCountRaw, address });
             }
         """);
 
@@ -388,6 +403,9 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
         var address = root.GetProperty("address").GetString() ?? "";
         var ratingStr = root.GetProperty("rating").GetString();
         var reviewCountRaw = root.GetProperty("reviewCountRaw").GetString();
+        var realReviewsCountRaw = root.TryGetProperty("realReviewsCountRaw", out var rrcEl)
+            ? rrcEl.GetString()
+            : null;
 
         double? rating = null;
         if (!string.IsNullOrEmpty(ratingStr)
@@ -405,6 +423,14 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
                 reviewCount = cnt;
         }
 
+        int? realReviewsCount = null;
+        if (!string.IsNullOrEmpty(realReviewsCountRaw))
+        {
+            var digits = ReviewCountDigitsRegex().Replace(realReviewsCountRaw, "");
+            if (!string.IsNullOrEmpty(digits) && int.TryParse(digits, out var cnt))
+                realReviewsCount = cnt;
+        }
+
         if (string.IsNullOrEmpty(name)) return null;
 
         return new SearchBranchResult(
@@ -414,7 +440,8 @@ public partial class YandexMapsPlugin : IReviewSourcePlugin
             Name: name,
             Address: address,
             Rating: rating,
-            ReviewCount: reviewCount);
+            ReviewCount: reviewCount,
+            RealReviewsCount: realReviewsCount);
     }
 
     private static bool IsTransient(Exception ex)

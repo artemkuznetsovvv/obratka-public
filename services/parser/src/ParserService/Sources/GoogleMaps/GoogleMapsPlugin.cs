@@ -420,7 +420,12 @@ public class GoogleMapsPlugin : IReviewSourcePlugin
                 Name: r.Name ?? "",
                 Address: r.Address ?? "",
                 Rating: r.Rating,
-                ReviewCount: r.ReviewCount))
+                ReviewCount: r.ReviewCount,
+                // У Google карточка поиска показывает именно «N отзывов», т.е. ReviewCount
+                // и так настоящее число отзывов с текстом → дублируем в RealReviewsCount.
+                // Это нужно чтобы клиенты могли единообразно читать RealReviewsCount
+                // независимо от источника.
+                RealReviewsCount: r.ReviewCount))
             .ToList();
     }
 

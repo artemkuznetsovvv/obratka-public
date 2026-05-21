@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Net;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using Microsoft.Playwright;
@@ -149,6 +151,23 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
                 var page = await browserContext.NewPageAsync();
                 try
                 {
+                    // 2GIS-овский catalog.api.2gis.ru/3.0/markers/clustered возвращает для каждой
+                    // карточки два разных счётчика:
+                    //   reviews.general_review_count            — отзывы с текстом
+                    //   reviews.general_review_count_with_stars — все оценки (звёзды без текста)
+                    // DOM-карточка показывает только with_stars («N оценок»), отзыв-каунт нигде
+                    // не виден на UI 2ГИС. Поэтому перехватываем API и кладём настоящий
+                    // отзыв-каунт в отдельное поле RealReviewsCount, не трогая ReviewCount.
+                    // (Раньше пробовал override-ить ReviewCount, но клиенты по нему привязаны как
+                    // к «популярности» — см. SearchBranchResult.RealReviewsCount xml-doc.)
+                    var realReviewsByFirmId = new ConcurrentDictionary<string, int>();
+                    page.Response += (_, response) =>
+                    {
+                        if (!response.Url.Contains("catalog.api.2gis.ru/3.0/markers/clustered")) return;
+                        if (response.Status != 200) return;
+                        _ = CaptureMarkersResponseAsync(response, realReviewsByFirmId);
+                    };
+
                     var citySlug = MapCityToSlug(request.City);
                     var encodedQuery = Uri.EscapeDataString(request.Query);
                     var searchUrl = $"https://2gis.ru/{citySlug}/search/{encodedQuery}";
@@ -161,7 +180,8 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
                     });
                     await Task.Delay(Random.Shared.Next(2000, 4000), ct);
 
-                    results = await ExtractSearchResultsAsync(page, ct);
+                    var domResults = await ExtractSearchResultsAsync(page, ct);
+                    results = AttachRealReviewsCount(domResults, realReviewsByFirmId);
                     break;
                 }
                 finally
@@ -465,4 +485,84 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
         [property: System.Text.Json.Serialization.JsonPropertyName("url")] string? Url,
         [property: System.Text.Json.Serialization.JsonPropertyName("rating")] double? Rating,
         [property: System.Text.Json.Serialization.JsonPropertyName("reviewCount")] int? ReviewCount);
+
+    /// <summary>
+    /// Парсит ответ catalog.api.2gis.ru/3.0/markers/clustered и складывает
+    /// firmId → general_review_count (отзывы с текстом — для поля
+    /// <see cref="SearchBranchResult.RealReviewsCount"/>).
+    /// Один поиск может триггерить несколько запросов (зум/смещение карты) —
+    /// аккумулируем все.
+    /// </summary>
+    private async Task CaptureMarkersResponseAsync(
+        IResponse response,
+        ConcurrentDictionary<string, int> realReviewsByFirmId)
+    {
+        try
+        {
+            var body = await response.TextAsync();
+            using var doc = JsonDocument.Parse(body);
+
+            if (!doc.RootElement.TryGetProperty("result", out var result)) return;
+            if (!result.TryGetProperty("items", out var items)) return;
+            if (items.ValueKind != JsonValueKind.Array) return;
+
+            foreach (var item in items.EnumerateArray())
+            {
+                if (!item.TryGetProperty("id", out var idEl)) continue;
+                var id = idEl.GetString();
+                if (string.IsNullOrEmpty(id)) continue;
+
+                // item.id формата "<firmId>_<hash>"; firmId — числовая часть до подчёркивания.
+                var firmId = id.Split('_', 2)[0];
+                if (string.IsNullOrEmpty(firmId)) continue;
+
+                if (!item.TryGetProperty("reviews", out var reviews)) continue;
+                if (!reviews.TryGetProperty("general_review_count", out var countEl)) continue;
+                if (countEl.ValueKind != JsonValueKind.Number) continue;
+
+                realReviewsByFirmId[firmId] = countEl.GetInt32();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[2GIS] Не удалось распарсить markers/clustered для RealReviewsCount");
+        }
+    }
+
+    /// <summary>
+    /// Добавляет <see cref="SearchBranchResult.RealReviewsCount"/> к DOM-результатам
+    /// из аккумулированной API-карты. <see cref="SearchBranchResult.ReviewCount"/> не
+    /// трогаем — там «N оценок» из DOM-карточки, нужно для совместимости.
+    /// </summary>
+    private List<SearchBranchResult> AttachRealReviewsCount(
+        IReadOnlyList<SearchBranchResult> domResults,
+        ConcurrentDictionary<string, int> realReviewsByFirmId)
+    {
+        if (realReviewsByFirmId.IsEmpty)
+        {
+            _logger.LogDebug("[2GIS] markers/clustered не успел отдать данные — RealReviewsCount останется null");
+            return domResults.ToList();
+        }
+
+        int filled = 0, missing = 0;
+        var result = new List<SearchBranchResult>(domResults.Count);
+        foreach (var r in domResults)
+        {
+            if (!string.IsNullOrEmpty(r.ExternalId)
+                && realReviewsByFirmId.TryGetValue(r.ExternalId, out var realCount))
+            {
+                filled++;
+                result.Add(r with { RealReviewsCount = realCount });
+            }
+            else
+            {
+                missing++;
+                result.Add(r); // RealReviewsCount остаётся null
+            }
+        }
+        _logger.LogDebug(
+            "[2GIS] RealReviewsCount: заполнено {Filled}, без данных {Missing} (из {Total})",
+            filled, missing, domResults.Count);
+        return result;
+    }
 }
