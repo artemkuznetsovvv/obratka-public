@@ -77,9 +77,34 @@ internal sealed class BranchSearchService(
         }
         catch (ParserServiceException ex)
         {
-            logger.LogWarning(ex, "Parser search failed for query='{Query}' city='{City}'", query, city);
-            // Return empty groups so the UI can still show partial results.
-            return sourcesToFetch.ToDictionary(s => s, _ => new List<RawItem>());
+            logger.LogWarning(ex,
+                "Parser-Service returned {Status} for query='{Query}' city='{City}'",
+                (int)(ex.StatusCode ?? System.Net.HttpStatusCode.InternalServerError), query, city);
+            throw new BranchSearchUnavailableException(
+                $"Сервис парсера вернул ошибку {(int)(ex.StatusCode ?? System.Net.HttpStatusCode.InternalServerError)}. Попробуйте ещё раз через минуту.",
+                ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            // Connection refused / DNS / TLS — Parser-Service недоступен на сетевом уровне.
+            // Без отдельного catch падало голым 500 от ASP.NET → axios на фронте видел
+            // "Request failed with status code 500" вместо понятного текста.
+            logger.LogWarning(ex,
+                "Parser-Service unreachable for query='{Query}' city='{City}'", query, city);
+            throw new BranchSearchUnavailableException(
+                "Сервис парсера сейчас недоступен. Проверьте, что стенд поднят, и попробуйте позже.",
+                ex);
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            // OperationCanceledException БЕЗ внешней отмены = HttpClient.Timeout. Внешнюю отмену
+            // (юзер закрыл вкладку, контроллер пробросил ct) не оборачиваем — она дойдёт до
+            // ASP.NET как валидный «клиент отвалился».
+            logger.LogWarning(ex,
+                "Parser-Service timeout for query='{Query}' city='{City}'", query, city);
+            throw new BranchSearchUnavailableException(
+                "Сервис парсера слишком долго не отвечает. Попробуйте позже.",
+                ex);
         }
 
         var bySource = parserResponse.Results
@@ -153,23 +178,33 @@ internal sealed class BranchSearchService(
     }
 
     // Re-syncs candidate branches in `company_branches` for (companyId, city):
-    //  - drops all IsSelected=false rows
-    //  - refreshes metadata on IsSelected=true rows whose (Source, ExternalId) matches new results (non-empty externalId only)
+    //  - drops all IsSelected=false rows OF THE CURRENT CITY
+    //  - refreshes metadata on rows whose (Source, ExternalId) matches new results
     //  - inserts every remaining found item as a fresh candidate
+    //  - SKIPS cross-city duplicates (same (source, externalId) уже привязан к другому
+    //    городу этой же компании — иначе нарушим partial unique index, который не
+    //    учитывает city). Это типовой сценарий когда парсер на запрос по городу B
+    //    возвращает место из города A.
     // Returns groups with the real CompanyBranch.Id for each item — the frontend uses it as the
     // selection key, so we don't need stable externalId from parser plugins.
     private async Task<List<BranchSearchSourceGroup>> PersistCandidatesAsync(
         Guid companyId, string city, List<(string Source, List<RawItem> Items)> rawGroups, CancellationToken ct)
     {
+        // Загружаем ВСЕ branches компании (по всем городам) — нужно для cross-city
+        // дедупа. Раньше фильтр был b.City == city, и об уже привязанных к другим городам
+        // мы ничего не знали → INSERT падал по уникальному индексу.
         var existing = await db.CompanyBranches
-            .Where(b => b.CompanyId == companyId && b.City == city)
+            .Where(b => b.CompanyId == companyId)
             .ToListAsync(ct);
 
-        var selected = existing.Where(b => b.IsSelected).ToList();
-        var candidates = existing.Where(b => !b.IsSelected).ToList();
-        db.CompanyBranches.RemoveRange(candidates);
+        var currentCityCandidates = existing.Where(b => !b.IsSelected && b.City == city).ToList();
+        db.CompanyBranches.RemoveRange(currentCityCandidates);
 
-        var selectedByExternalKey = selected
+        // Все «оставшиеся» строки (то что мы не удалили) занимают уникальный ключ
+        // (CompanyId, Source, ExternalId). При новом INSERT-е мы должны их учитывать,
+        // даже если они принадлежат другому городу.
+        var availableByExternalKey = existing
+            .Except(currentCityCandidates)
             .Where(b => !string.IsNullOrEmpty(b.ExternalId))
             .GroupBy(b => (b.Source, b.ExternalId))
             .ToDictionary(g => g.Key, g => g.First());
@@ -180,19 +215,46 @@ internal sealed class BranchSearchService(
         foreach (var (source, items) in rawGroups)
         {
             var resultItems = new List<BranchSearchResultItem>(items.Count);
+            // Партиальный уникальный индекс (CompanyId, Source, ExternalId) WHERE ExternalId<>''
+            // не переживёт два айтема с одинаковым непустым externalId в одном ответе парсера
+            // (бывает на 2ГИС/Яндекс/Google — карточки-дубли). Дедупим в пределах source'а.
+            var seenByExternalId = new Dictionary<string, CompanyBranch>(StringComparer.Ordinal);
             foreach (var raw in items)
             {
                 var externalId = raw.ExternalId ?? string.Empty;
+                if (!string.IsNullOrEmpty(externalId)
+                    && seenByExternalId.ContainsKey(externalId))
+                {
+                    // Дубль из ответа парсера — пропускаем, чтобы не падать на unique key и
+                    // не плодить в UI карточки с одинаковым branch.Id.
+                    continue;
+                }
+
                 CompanyBranch row;
                 if (!string.IsNullOrEmpty(externalId)
-                    && selectedByExternalKey.TryGetValue((source, externalId), out var existingSelected))
+                    && availableByExternalKey.TryGetValue((source, externalId), out var existingMatch))
                 {
-                    existingSelected.ExternalUrl = raw.ExternalUrl;
-                    existingSelected.Name = raw.Name;
-                    existingSelected.Address = raw.Address;
-                    existingSelected.Rating = raw.Rating;
-                    existingSelected.ReviewCount = raw.ReviewCount;
-                    row = existingSelected;
+                    if (existingMatch.City == city)
+                    {
+                        // Тот же город — переиспользуем существующую строку (selected или
+                        // candidate другой группы) и обновляем метаданные.
+                        existingMatch.ExternalUrl = raw.ExternalUrl;
+                        existingMatch.Name = raw.Name;
+                        existingMatch.Address = raw.Address;
+                        existingMatch.Rating = raw.Rating;
+                        existingMatch.ReviewCount = raw.ReviewCount;
+                        row = existingMatch;
+                    }
+                    else
+                    {
+                        // Cross-city: то же (source, externalId) уже привязано к другому городу.
+                        // Один external_id = одно физическое место — значит парсер ошибся,
+                        // вернул место из другого города. Скипаем, не показываем в этом городе.
+                        logger.LogDebug(
+                            "Skipping cross-city duplicate: companyId={CompanyId}, source={Source}, externalId={ExternalId}, requested-city={City}, existing-city={ExistingCity}",
+                            companyId, source, externalId, city, existingMatch.City);
+                        continue;
+                    }
                 }
                 else
                 {
@@ -212,16 +274,58 @@ internal sealed class BranchSearchService(
                     db.CompanyBranches.Add(row);
                     newRows.Add(row);
                 }
+
+                if (!string.IsNullOrEmpty(externalId))
+                    seenByExternalId[externalId] = row;
+
                 resultItems.Add(new BranchSearchResultItem(
                     row.Id, source, raw.ExternalId, raw.ExternalUrl, raw.Name, raw.Address, raw.Rating, raw.ReviewCount));
             }
             resultGroups.Add(new BranchSearchSourceGroup(source, resultItems));
         }
 
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            // Если после in-memory dedup всё равно прилетел 23505 — значит между нашим
+            // SELECT existing и SaveChanges кто-то параллельно вставил ту же запись
+            // (типовой race при одновременных search'ах одной компании). Голым 500 фронту
+            // прилетал бы axios "Request failed with status code 500" — это бесполезно
+            // юзеру. Лучше — типизированное исключение, контроллер мапит в 502 + текст.
+            logger.LogWarning(ex,
+                "Race на уникальный индекс company_branches при сохранении кандидатов для companyId={CompanyId}, city={City}",
+                companyId, city);
+            throw new BranchSearchUnavailableException(
+                "Конфликт при сохранении результатов поиска (параллельный запрос). Попробуйте ещё раз.",
+                ex);
+        }
         return resultGroups;
     }
 
+    /// <summary>
+    /// PostgreSQL SQLSTATE 23505 = unique_violation. Используется чтобы отличать
+    /// «реальную» проблему от race-конфликтов уникального индекса.
+    /// </summary>
+    private static bool IsUniqueViolation(DbUpdateException ex) =>
+        ex.InnerException is Npgsql.PostgresException pg && pg.SqlState == "23505";
+
     private static string Normalize(string value) =>
         value.Trim().ToLowerInvariant();
+}
+
+/// <summary>
+/// Поиск филиалов через Parser-Service провалился по причине, которую имеет смысл
+/// показать пользователю текстом, а не как голый 500. Контроллер мапит это в 502
+/// + ProblemDetails. Внутренние exception'ы (DB, валидация) сюда НЕ оборачиваем —
+/// они должны падать своим path-ом.
+/// </summary>
+public sealed class BranchSearchUnavailableException : Exception
+{
+    public BranchSearchUnavailableException(string message, Exception? inner = null)
+        : base(message, inner)
+    {
+    }
 }

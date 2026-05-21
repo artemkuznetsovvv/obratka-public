@@ -108,6 +108,7 @@ public sealed class CompaniesController(
     [HttpPost("{id:guid}/search")]
     [ProducesResponseType(typeof(BranchSearchResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status502BadGateway)]
     public async Task<ActionResult<BranchSearchResponse>> Search(
         Guid id,
         [FromQuery] string city,
@@ -126,8 +127,20 @@ public sealed class CompaniesController(
         if (company is null) return NotFound();
 
         var effectiveSources = sources is { Length: > 0 } ? sources : BranchSources.All;
-        var result = await searchService.SearchAsync(company.Id, company.Name, city, effectiveSources, ct);
-        return Ok(result);
+        try
+        {
+            var result = await searchService.SearchAsync(company.Id, company.Name, city, effectiveSources, ct);
+            return Ok(result);
+        }
+        catch (BranchSearchUnavailableException ex)
+        {
+            // 502 Bad Gateway = upstream (Parser-Service) ответил плохо или недоступен.
+            // detail летит во фронт в data.detail — описано человеческим текстом.
+            return Problem(
+                statusCode: StatusCodes.Status502BadGateway,
+                title: "Поиск временно недоступен",
+                detail: ex.Message);
+        }
     }
 
     [HttpPost("{id:guid}/branches")]

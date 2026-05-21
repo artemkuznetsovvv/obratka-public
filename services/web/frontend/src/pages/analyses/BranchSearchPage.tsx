@@ -10,6 +10,7 @@ import {
   type BranchSearchResultItem,
   type BranchSearchSourceGroup,
 } from '@/api/companies'
+import { describeApiError } from '@/api/errors'
 import { cn } from '@/lib/utils'
 import { AnalysisStepper } from './AnalysisStepper'
 
@@ -45,6 +46,13 @@ export default function BranchSearchPage() {
 
   const cities = companyQuery.data?.cities ?? []
   const allDone = cities.length > 0 && cities.every((c) => cityStates[c]?.status === 'done')
+  // Все города дошли до финального состояния (или нашлось, или ошибка). Используется
+  // для разблокировки «Запустить анализ» — раньше требовалось ВСЕ done, и при
+  // ошибке/пустом результате хоть в одном городе кнопка вечно блокировалась.
+  const allFinished = cities.length > 0 && cities.every((c) => {
+    const s = cityStates[c]?.status
+    return s === 'done' || s === 'error'
+  })
   const hasMultipleCities = cities.length > 1
 
   useEffect(() => {
@@ -68,7 +76,9 @@ export default function BranchSearchPage() {
           }))
         } catch (err) {
           if (cancelled) return
-          const message = err instanceof Error ? err.message : 'Ошибка поиска'
+          // Web API кидает 502 + ProblemDetails{detail:"..."} при недоступном/упавшем
+          // парсере. describeApiError достанет detail из тела, иначе fallback на message.
+          const message = describeApiError(err, 'Не удалось выполнить поиск')
           setCityStates((prev) => ({ ...prev, [city]: { status: 'error', message } }))
         }
       }
@@ -117,8 +127,7 @@ export default function BranchSearchPage() {
       await companiesApi.saveBranches(companyId, branchIds)
       navigate('/history')
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Не удалось сохранить выбор'
-      setSaveError(message)
+      setSaveError(describeApiError(err, 'Не удалось сохранить выбор'))
     } finally {
       setSaving(false)
     }
@@ -194,7 +203,12 @@ export default function BranchSearchPage() {
                 </Button>
                 <Button
                   onClick={onLaunch}
-                  disabled={!allDone || saving || selected.size === 0}
+                  // Требуем чтобы все города дошли до финального состояния (done или error),
+                  // но не требуем чтобы ВСЕ они нашли что-то. Если хоть один город дал
+                  // результаты и юзер что-то выбрал — можно запускать, упавшие/пустые
+                  // города при сохранении просто проигнорируются (saveBranches принимает
+                  // только выбранные ids).
+                  disabled={!allFinished || saving || selected.size === 0}
                   className="gap-2"
                 >
                   {saving ? 'Сохраняем…' : 'Запустить анализ'}
@@ -244,17 +258,28 @@ function CitySection({
         </Card>
       )}
       {state.status === 'error' && (
-        <Card className="p-5 text-sm text-destructive">Ошибка поиска: {state.message}</Card>
+        <Card className="p-5 space-y-2 text-sm text-destructive">
+          <div>{state.message}</div>
+          <div className="text-text-tertiary">
+            Проверьте правильность ввода названия города/компании. Если другие города нашлись —
+            запустить анализ можно по ним, этот будет проигнорирован.
+          </div>
+        </Card>
       )}
-      {state.status === 'done' && state.sources.length === 0 && (
-        <Card className="p-5 text-sm text-text-tertiary">Ничего не найдено в этом городе.</Card>
+      {state.status === 'done' && totalFoundInState(state) === 0 && (
+        <Card className="p-5 space-y-2 text-sm text-text-tertiary">
+          <div>Ничего не найдено в этом городе.</div>
+          <div>
+            Возможно, парсер не сматчил название. Проверьте правильность ввода или
+            удалите этот город из анкеты компании.
+          </div>
+        </Card>
       )}
-      {state.status === 'done' && state.sources.length > 0 && (
+      {state.status === 'done' && totalFoundInState(state) > 0 && (
         <div className="space-y-3">
           {state.sources.map((group) => (
             <SourceGroup
               key={group.source}
-              city={city}
               group={group}
               selected={selected}
               onToggle={onToggle}
@@ -267,12 +292,10 @@ function CitySection({
 }
 
 function SourceGroup({
-  city,
   group,
   selected,
   onToggle,
 }: {
-  city: string
   group: BranchSearchSourceGroup
   selected: Set<string>
   onToggle: (key: string) => void
@@ -337,6 +360,13 @@ function SourceGroup({
       )}
     </Card>
   )
+}
+
+// «Ничего не найдено» = ни в одной source-группе нет items. Просто
+// state.sources.length === 0 не годится: бэк возвращает все запрошенные источники
+// как пустые группы, длина массива остаётся ≥ 1.
+function totalFoundInState(state: { status: 'done'; sources: BranchSearchSourceGroup[] }): number {
+  return state.sources.reduce((acc, g) => acc + g.items.length, 0)
 }
 
 function pluralizePoints(n: number) {
