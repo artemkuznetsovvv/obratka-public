@@ -20,5 +20,11 @@ public class SearchCacheItem
     public string Name { get; set; } = string.Empty;
     public string? Address { get; set; }
     public double? Rating { get; set; }
+    // ReviewCount = «число оценок» (rating votes) — что источник показывает рядом с
+    // рейтингом. Сохраняется по историческому контракту. См. xml-doc у
+    // ParserService.Core.Models.SearchBranchResult.ReviewCount.
     public int? ReviewCount { get; set; }
+    // RealReviewsCount = настоящее число отзывов с текстом, когда удалось достать
+    // (2GIS API + Yandex single-org tab-badge + Google). null если нет.
+    public int? RealReviewsCount { get; set; }
 }

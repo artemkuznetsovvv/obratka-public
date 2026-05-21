@@ -39,7 +39,13 @@ public sealed record BranchSearchResultItem(
     string Name,
     string? Address,
     double? Rating,
-    int? ReviewCount);
+    // ReviewCount = «число оценок» (rating votes) — что источник показывает рядом
+    // с рейтингом. Для Google это совпадает с реальным числом отзывов.
+    int? ReviewCount,
+    // Настоящее число отзывов с текстом, если удалось точно достать. null когда
+    // источник его не отдаёт (Yandex multi-result list). Search-only поле — в
+    // CompanyBranch не сохраняется.
+    int? RealReviewsCount);
 
 public sealed record BranchSearchSourceGroup(
     string Source,

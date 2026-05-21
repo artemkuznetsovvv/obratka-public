@@ -49,6 +49,10 @@ public sealed record ParserSearchBranchResult(
     string Name,
     string Address,
     double? Rating,
-    int? ReviewCount);
+    int? ReviewCount,
+    // Настоящее число отзывов с текстом. ReviewCount для 2GIS/Yandex — это
+    // число оценок (rating votes), а не отзывов. Для Google ReviewCount = RealReviewsCount.
+    // null если источник реальное число не отдаёт (Яндекс multi-result list).
+    int? RealReviewsCount);
 
 public sealed record ParserSearchResponse(IReadOnlyList<ParserSearchBranchResult> Results);

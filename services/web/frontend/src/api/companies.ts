@@ -40,7 +40,12 @@ export interface BranchSearchResultItem {
   name: string
   address: string | null
   rating: number | null
+  // reviewCount = «число оценок» рядом с рейтингом (для 2GIS/Yandex — rating votes,
+  // НЕ отзывы; для Google совпадает с realReviewsCount).
   reviewCount: number | null
+  // realReviewsCount = настоящее число отзывов с текстом. null если источник
+  // не отдаёт точное значение (Yandex multi-result search list).
+  realReviewsCount: number | null
 }
 
 export interface BranchSearchSourceGroup {

@@ -347,7 +347,15 @@ function SourceGroup({
                       <span className="font-medium text-text-primary">{item.rating.toFixed(1)}</span>
                       {item.reviewCount !== null && (
                         <span className="text-xs text-text-tertiary">
-                          {item.reviewCount.toLocaleString('ru-RU')} {pluralizeReviews(item.reviewCount)}
+                          {/*
+                            Везде показываем «оценок» — единообразный лейбл для всех источников.
+                            Для Google realReviewsCount === reviewCount, поэтому второй кусок
+                            («· M отзывов») сам собой не покажется.
+                          */}
+                          {item.reviewCount.toLocaleString('ru-RU')} {pluralizeRatings(item.reviewCount)}
+                          {item.realReviewsCount !== null && item.realReviewsCount !== item.reviewCount && (
+                            <> · {item.realReviewsCount.toLocaleString('ru-RU')} {pluralizeReviews(item.realReviewsCount)}</>
+                          )}
                         </span>
                       )}
                     </div>
@@ -383,4 +391,13 @@ function pluralizeReviews(n: number) {
   if (mod10 === 1 && mod100 !== 11) return 'отзыв'
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'отзыва'
   return 'отзывов'
+}
+
+// Для «N оценок» (rating votes — 2GIS/Yandex счётчик рядом с рейтингом).
+function pluralizeRatings(n: number) {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return 'оценка'
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'оценки'
+  return 'оценок'
 }

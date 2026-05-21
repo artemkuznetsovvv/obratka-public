@@ -15,7 +15,8 @@ internal sealed class BranchSearchService(
     private static readonly TimeSpan CacheTtl = TimeSpan.FromDays(7);
 
     private sealed record RawItem(
-        string Source, string? ExternalId, string? ExternalUrl, string Name, string? Address, double? Rating, int? ReviewCount);
+        string Source, string? ExternalId, string? ExternalUrl, string Name, string? Address,
+        double? Rating, int? ReviewCount, int? RealReviewsCount);
 
     public async Task<BranchSearchResponse> SearchAsync(
         Guid companyId, string query, string city, IReadOnlyList<string> sources, CancellationToken ct)
@@ -44,7 +45,8 @@ internal sealed class BranchSearchService(
         foreach (var entry in cached)
         {
             rawBySource[entry.Source] = entry.Results
-                .Select(r => new RawItem(entry.Source, r.ExternalId, r.ExternalUrl, r.Name, r.Address, r.Rating, r.ReviewCount))
+                .Select(r => new RawItem(entry.Source, r.ExternalId, r.ExternalUrl, r.Name, r.Address,
+                    r.Rating, r.ReviewCount, r.RealReviewsCount))
                 .ToList();
         }
 
@@ -135,6 +137,7 @@ internal sealed class BranchSearchService(
                 Address = r.Address,
                 Rating = r.Rating,
                 ReviewCount = r.ReviewCount,
+                RealReviewsCount = r.RealReviewsCount,
             }).ToList();
 
             if (existingBySource.TryGetValue(source, out var current))
@@ -155,7 +158,8 @@ internal sealed class BranchSearchService(
             }
 
             result[source] = items
-                .Select(r => new RawItem(source, r.ExternalId, r.ExternalUrl, r.Name, r.Address, r.Rating, r.ReviewCount))
+                .Select(r => new RawItem(source, r.ExternalId, r.ExternalUrl, r.Name, r.Address,
+                    r.Rating, r.ReviewCount, r.RealReviewsCount))
                 .ToList();
         }
 
@@ -279,7 +283,8 @@ internal sealed class BranchSearchService(
                     seenByExternalId[externalId] = row;
 
                 resultItems.Add(new BranchSearchResultItem(
-                    row.Id, source, raw.ExternalId, raw.ExternalUrl, raw.Name, raw.Address, raw.Rating, raw.ReviewCount));
+                    row.Id, source, raw.ExternalId, raw.ExternalUrl, raw.Name, raw.Address,
+                    raw.Rating, raw.ReviewCount, raw.RealReviewsCount));
             }
             resultGroups.Add(new BranchSearchSourceGroup(source, resultItems));
         }
