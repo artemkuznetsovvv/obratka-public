@@ -1,0 +1,43 @@
+# build output
+**/bin/
+**/obj/
+**/publish/
+
+# IDE / editors
+**/.vs/
+**/.vscode/
+**/.idea/
+
+# VCS
+.git/
+.gitignore
+.gitattributes
+
+# docs / spec
+**/*.md
+docs/
+test-cases.md
+
+# tests не нужны в prod образе
+tests/
+
+# dev данные и локальные артефакты
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
+
+# dev секреты — не должны попасть в образ
+**/appsettings.Development.json
+.env
+.env.*
+
+# Dockerfile / compose (используются снаружи, в образ не нужны)
+**/Dockerfile
+**/docker-compose*.yml
+
+# мусор
+.DS_Store
+Thumbs.db
