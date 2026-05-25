@@ -15,6 +15,7 @@ import BranchSearchPage from '@/pages/analyses/BranchSearchPage'
 import AnalysisSummaryPage from '@/pages/analyses/AnalysisSummaryPage'
 import HistoryListPage from '@/pages/history/HistoryListPage'
 import HistoryDetailPage from '@/pages/history/HistoryDetailPage'
+import DashboardPage from '@/pages/dashboards/DashboardPage'
 
 export default function App() {
   return (
@@ -51,6 +52,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <HistoryDetailPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/history/:jobId/dashboard"
+        element={
+          <ProtectedRoute>
+            <DashboardPage />
           </ProtectedRoute>
         }
       />

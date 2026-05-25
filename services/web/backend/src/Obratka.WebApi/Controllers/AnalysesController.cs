@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Obratka.WebApi.Auth;
 using Obratka.WebApi.Contracts.Analyses;
+using Obratka.WebApi.Contracts.Dashboards;
 using Obratka.WebApi.Data;
 using Obratka.WebApi.Integration.ProcessingGateway;
 using Obratka.WebApi.Integration.ProcessingGateway.Contracts;
@@ -226,6 +227,84 @@ public sealed class AnalysesController(
             })
             .ToList();
         return Ok(dto);
+    }
+
+    // Шапка дашборда для конкретного завершённого/частично завершённого анализа.
+    // Phase 0: возвращаем только хедер (компания, branches, sources, статус, счётчики).
+    // Метрики (О1-О3, 1-7) добавятся позже отдельными полями/методами.
+    // Period берём из company.draftPeriodFrom/to — это caveat: фактический период
+    // джоба в processing_db не хранится (processing-gateway-todo.md #1).
+    [HttpGet("{jobId:guid}/dashboard")]
+    [ProducesResponseType(typeof(DashboardHeaderDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status502BadGateway)]
+    public async Task<ActionResult<DashboardHeaderDto>> Dashboard(
+        Guid jobId, CancellationToken ct)
+    {
+        var ownerId = GetUserIdOrNull();
+        if (ownerId is null) return Unauthorized();
+
+        var job = await gateway.GetAnalysisAsync(jobId, ct);
+        if (job is null) return NotFound();
+
+        var company = await db.Companies.AsNoTracking()
+            .Where(c => c.Id == job.CompanyId && c.OwnerUserId == ownerId)
+            .Select(c => new { c.Id, c.Name, c.DraftPeriodFrom, c.DraftPeriodTo })
+            .SingleOrDefaultAsync(ct);
+        if (company is null) return NotFound();
+
+        // Список филиалов джоба — distinct(branch_id) из branch-stats (PG уже отдаёт
+        // готовый агрегат по analysis_job_reviews × reviews). Имена и адреса джойним
+        // из webapi_db.LogicalBranches; удалённый филиал → name=null (UI покажет
+        // placeholder, как в HistoryDetailPage).
+        IReadOnlyList<BranchStatsItem> stats;
+        try
+        {
+            stats = await gateway.GetBranchStatsAsync(jobId, ct);
+        }
+        catch (ProcessingGatewayException ex)
+        {
+            logger.LogWarning(ex, "PG вернул ошибку на branch-stats для dashboard {JobId}", jobId);
+            return Problem(
+                statusCode: StatusCodes.Status502BadGateway,
+                title: "Не удалось получить данные дашборда",
+                detail: "Processing Gateway не отдал список филиалов для анализа.");
+        }
+
+        var branchIds = stats.Select(s => s.BranchId).Distinct().ToList();
+        var branchInfos = await db.LogicalBranches.AsNoTracking()
+            .Where(lb => lb.CompanyId == job.CompanyId && branchIds.Contains(lb.Id))
+            .Select(lb => new { lb.Id, lb.Name, lb.Address })
+            .ToListAsync(ct);
+        var byId = branchInfos.ToDictionary(b => b.Id);
+
+        var branches = branchIds
+            .Select(id =>
+            {
+                byId.TryGetValue(id, out var info);
+                return new DashboardBranchDto(id, info?.Name, info?.Address);
+            })
+            .ToList();
+
+        // sources — ключи collection_progress (PG заполняет один ключ на каждый
+        // источник, по которому шёл сбор; формат фиксирован — slug-и 2gis/yandex/google).
+        var sources = job.CollectionProgress.Keys
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToList();
+
+        return Ok(new DashboardHeaderDto(
+            JobId: job.Id,
+            CompanyId: company.Id,
+            CompanyName: company.Name,
+            Branches: branches,
+            Sources: sources,
+            Status: job.Status,
+            ReviewCount: job.ReviewCount,
+            RecommendationsCount: job.RecommendationsCount,
+            CreatedAt: job.CreatedAt,
+            CompletedAt: job.CompletedAt,
+            PeriodFrom: company.DraftPeriodFrom,
+            PeriodTo: company.DraftPeriodTo));
     }
 
     private Guid? GetUserIdOrNull()

@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   AlertCircle,
   ArrowLeft,
+  ArrowRight,
   Building2,
   CalendarRange,
   Check,
@@ -11,6 +12,7 @@ import {
   ChevronDown,
   Clock,
   Layers,
+  LayoutDashboard,
   ListTree,
   Loader2,
   MapPin,
@@ -237,8 +239,19 @@ export default function HistoryDetailPage() {
 
                 <BranchStatsBlock jobId={job.id} companyId={job.companyId} />
 
-                <div className="mt-4 text-xs text-text-tertiary">
-                  Полный дашборд и список рекомендаций — в следующих обновлениях.
+                <div className="mt-5 flex items-center justify-between gap-3 flex-wrap">
+                  <div className="text-xs text-text-tertiary">
+                    Список рекомендаций — в следующих обновлениях.
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={() => navigate(`/history/${job.id}/dashboard`)}
+                    className="gap-2"
+                  >
+                    <LayoutDashboard size={14} />
+                    Открыть дашборд
+                    <ArrowRight size={14} />
+                  </Button>
                 </div>
               </Card>
             )}
