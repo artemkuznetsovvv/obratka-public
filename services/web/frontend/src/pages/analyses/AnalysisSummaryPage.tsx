@@ -25,11 +25,6 @@ import {
   type WizardState,
 } from './wizardState'
 
-// Минимум отзывов для разумного LLM-анализа (ТЗ 2.7). Финальная проверка
-// по факту сбора сейчас на стороне Processing Gateway; этот порог — только
-// раннее предупреждение, чтобы юзер успел расширить период/источники.
-const MIN_REVIEWS_FOR_ANALYSIS = 10
-
 const SOURCE_META: Record<string, { label: string; color: string }> = {
   '2gis': { label: '2ГИС', color: 'bg-emerald-100 text-emerald-700' },
   yandex: { label: 'Яндекс.Карты', color: 'bg-amber-100 text-amber-700' },
@@ -71,15 +66,6 @@ export default function AnalysisSummaryPage() {
   }, [branchesQuery.data, wizard.selectedBranchIds])
 
   const grouped = useMemo(() => groupByCityAndSource(selectedBranches), [selectedBranches])
-
-  // Heuristic quota pre-check: sum reviewCount across selected branches. This is a rough
-  // estimate (it's the source's «rating count», not «reviews within period»). Period filter
-  // happens during real collection — this is just to warn early.
-  const estimatedTotalReviews = selectedBranches.reduce(
-    (acc, b) => acc + (b.reviewCount ?? 0),
-    0,
-  )
-  const quotaLow = estimatedTotalReviews < MIN_REVIEWS_FOR_ANALYSIS
 
   const reachedFromStep2 = !!wizard.selectedBranchIds && wizard.selectedBranchIds.length > 0
 
@@ -266,54 +252,6 @@ export default function AnalysisSummaryPage() {
                 )}
               </SummaryBlock>
 
-              {/* Block 5: estimate / quota warning */}
-              {selectedBranches.length > 0 && (
-                <Card
-                  className={cn(
-                    'p-5',
-                    quotaLow ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-emerald-50/60',
-                  )}
-                >
-                  <div className="flex items-start gap-3">
-                    {quotaLow ? (
-                      <AlertTriangle size={18} className="text-amber-700 shrink-0 mt-0.5" />
-                    ) : (
-                      <Rocket size={18} className="text-emerald-700 shrink-0 mt-0.5" />
-                    )}
-                    <div className="text-sm">
-                      <div
-                        className={cn(
-                          'font-medium',
-                          quotaLow ? 'text-amber-900' : 'text-emerald-900',
-                        )}
-                      >
-                        Ожидаемый объём данных: ~{estimatedTotalReviews.toLocaleString('ru-RU')}{' '}
-                        отзывов
-                      </div>
-                      <div
-                        className={cn(
-                          'mt-1',
-                          quotaLow ? 'text-amber-800' : 'text-emerald-800',
-                        )}
-                      >
-                        {quotaLow ? (
-                          <>
-                            Минимум для качественного анализа — {MIN_REVIEWS_FOR_ANALYSIS} отзывов.
-                            По выбранным филиалам ожидаемого объёма недостаточно. Расширьте период,
-                            добавьте источники или филиалы — либо запустите как есть, если хотите
-                            проверить «есть ли вообще данные».
-                          </>
-                        ) : (
-                          <>
-                            Это оценка по общему счётчику отзывов на карточках; реальное число за
-                            выбранный период станет известно после сбора.
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </Card>
-              )}
             </div>
 
             <div className="mt-8 flex items-center justify-end gap-3">
