@@ -15,6 +15,7 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<Company> Companies => Set<Company>();
     public DbSet<CompanyBranch> CompanyBranches => Set<CompanyBranch>();
+    public DbSet<LogicalBranch> LogicalBranches => Set<LogicalBranch>();
     public DbSet<SearchCacheEntry> SearchCache => Set<SearchCacheEntry>();
     public DbSet<CityReference> Cities => Set<CityReference>();
 
@@ -66,11 +67,32 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
             b.Property(x => x.Address).HasMaxLength(1024);
             b.Property(x => x.City).HasMaxLength(200).IsRequired();
             b.HasIndex(x => x.CompanyId);
+            b.HasIndex(x => x.LogicalBranchId);
             // Partial unique index: only enforce when ExternalId is non-empty.
             // Parser plugins sometimes return null/empty externalId — those rows must coexist.
             b.HasIndex(x => new { x.CompanyId, x.Source, x.ExternalId })
                 .IsUnique()
                 .HasFilter("\"ExternalId\" <> ''");
+        });
+
+        builder.Entity<LogicalBranch>(b =>
+        {
+            b.ToTable("logical_branches");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Name).HasMaxLength(500).IsRequired();
+            b.Property(x => x.Address).HasMaxLength(1024).IsRequired();
+            b.Property(x => x.City).HasMaxLength(200).IsRequired();
+            b.HasIndex(x => x.CompanyId);
+            b.HasOne<Company>()
+                .WithMany()
+                .HasForeignKey(x => x.CompanyId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // Provider cards inside a logical branch. SetNull on delete so wiping a logical
+            // branch returns its cards to «unmatched» rather than dropping them entirely.
+            b.HasMany(x => x.Cards)
+                .WithOne()
+                .HasForeignKey(c => c.LogicalBranchId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         builder.Entity<CityReference>(b =>

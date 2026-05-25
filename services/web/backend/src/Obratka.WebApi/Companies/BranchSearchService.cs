@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Obratka.WebApi.Companies.Grouping;
 using Obratka.WebApi.Contracts.Companies;
 using Obratka.WebApi.Data;
 using Obratka.WebApi.Integration.ParserService;
@@ -9,6 +10,7 @@ namespace Obratka.WebApi.Companies;
 internal sealed class BranchSearchService(
     WebApiDbContext db,
     IParserServiceClient parser,
+    IBranchGroupingService grouping,
     ILogger<BranchSearchService> logger)
     : IBranchSearchService
 {
@@ -30,7 +32,7 @@ internal sealed class BranchSearchService(
             .ToArray();
 
         if (requestedSources.Length == 0)
-            return new BranchSearchResponse(city, []);
+            return new BranchSearchResponse(city, [], [], []);
 
         var now = DateTimeOffset.UtcNow;
 
@@ -64,7 +66,19 @@ internal sealed class BranchSearchService(
             .ToList();
 
         var persistedGroups = await PersistCandidatesAsync(companyId, city, rawGroups, ct);
-        return new BranchSearchResponse(city, persistedGroups);
+
+        // Автогруппировка работает поверх всех найденных карточек этого города,
+        // не разбитых по источникам. Union-Find склеивает карточки разных источников
+        // с похожими адресом/именем.
+        var allItems = persistedGroups.SelectMany(g => g.Items).ToList();
+        var groupingResult = grouping.Group(allItems, city);
+
+        var logicalGroups = groupingResult.Groups
+            .Select(g => new LogicalGroupDto(
+                g.GroupKey, g.CanonicalName, g.CanonicalAddress, g.City, g.MatchScore, g.Items))
+            .ToList();
+
+        return new BranchSearchResponse(city, persistedGroups, logicalGroups, groupingResult.Unmatched);
     }
 
     private async Task<Dictionary<string, List<RawItem>>> FetchAndCacheAsync(

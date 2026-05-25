@@ -53,9 +53,65 @@ export interface BranchSearchSourceGroup {
   items: BranchSearchResultItem[]
 }
 
+export interface LogicalGroupDto {
+  // Временный id (g-1, g-2, ...) — нестабилен между вызовами. Использовать только
+  // для управления состоянием в пределах одной сессии работы юзера со страницей.
+  groupKey: string
+  canonicalName: string
+  canonicalAddress: string
+  city: string
+  matchScore: number
+  providers: BranchSearchResultItem[]
+}
+
 export interface BranchSearchResponse {
   city: string
+  // Плоский список по источникам — оставлен для дебага и обратной совместимости.
   sources: BranchSearchSourceGroup[]
+  // Автогруппировка: один объект = один физический филиал (несколько источников).
+  logicalGroups: LogicalGroupDto[]
+  // Карточки, которые автоматика не смогла сгруппировать. Юзер привязывает их
+  // вручную через dropdown или игнорит.
+  unmatched: BranchSearchResultItem[]
+}
+
+export interface LogicalBranchProviderDto {
+  branchId: string
+  source: string
+  externalId: string | null
+  externalUrl: string | null
+  name: string
+  address: string | null
+  rating: number | null
+  reviewCount: number | null
+  isEnabled: boolean
+}
+
+export interface LogicalBranchDto {
+  id: string
+  name: string
+  address: string
+  city: string
+  isSelected: boolean
+  providers: LogicalBranchProviderDto[]
+}
+
+export interface SaveBranchGroupProvider {
+  branchId: string
+  isEnabled: boolean
+}
+
+export interface SaveBranchGroup {
+  name: string
+  address: string
+  city: string
+  isSelected: boolean
+  providers: SaveBranchGroupProvider[]
+}
+
+export interface SaveBranchGroupsRequest {
+  groups: SaveBranchGroup[]
+  ignoredBranchIds: string[]
 }
 
 export const companiesApi = {
@@ -80,4 +136,12 @@ export const companiesApi = {
 
   listBranches: (id: string) =>
     http.get<CompanyBranchDto[]>(`/api/companies/${id}/branches`).then((r) => r.data),
+
+  saveBranchGroups: (id: string, request: SaveBranchGroupsRequest) =>
+    http
+      .post<LogicalBranchDto[]>(`/api/companies/${id}/branches/save-groups`, request)
+      .then((r) => r.data),
+
+  listGroups: (id: string) =>
+    http.get<LogicalBranchDto[]>(`/api/companies/${id}/groups`).then((r) => r.data),
 }

@@ -1,15 +1,22 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, CalendarRange, Loader2, MapPin, Pencil, Star } from 'lucide-react'
+import {
+  ArrowRight,
+  CalendarRange,
+  ExternalLink,
+  Loader2,
+  MapPin,
+  Pencil,
+  Sparkles,
+  Star,
+  Ungroup,
+  X,
+} from 'lucide-react'
 import { AppLayout } from '@/layouts/AppLayout'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import {
-  companiesApi,
-  type BranchSearchResultItem,
-  type BranchSearchSourceGroup,
-} from '@/api/companies'
+import { companiesApi, type BranchSearchResultItem } from '@/api/companies'
 import { describeApiError } from '@/api/errors'
 import { cn } from '@/lib/utils'
 import { AnalysisStepper } from './AnalysisStepper'
@@ -21,21 +28,28 @@ import {
   saveWizardState,
   type WizardState,
 } from './wizardState'
-
-type CityState =
-  | { status: 'pending' }
-  | { status: 'searching' }
-  | { status: 'done'; sources: BranchSearchSourceGroup[] }
-  | { status: 'error'; message: string }
+import {
+  attachToGroup,
+  buildSavePayload,
+  type CitiesState,
+  type CityLayout,
+  type CityState,
+  type ClientGroup,
+  countActiveProviders,
+  createGroupFromUnmatched,
+  ignoreUnmatched,
+  layoutFromSearchResponse,
+  setGroupSelected,
+  setProviderEnabled,
+  ungroup,
+  unignore,
+} from './branchGroupingState'
 
 const SOURCE_META: Record<string, { label: string; color: string }> = {
   '2gis': { label: '2ГИС', color: 'bg-emerald-100 text-emerald-700' },
   yandex: { label: 'Яндекс.Карты', color: 'bg-amber-100 text-amber-700' },
   google: { label: 'Google Maps', color: 'bg-blue-100 text-blue-700' },
 }
-
-// Selection key is the internal CompanyBranch.Id — stable and unique even when parser
-// plugins don't return externalId.
 
 export default function BranchSearchPage() {
   const { companyId } = useParams<{ companyId: string }>()
@@ -47,39 +61,28 @@ export default function BranchSearchPage() {
     enabled: !!companyId,
   })
 
-  const [cityStates, setCityStates] = useState<Record<string, CityState>>({})
-  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [cityStates, setCityStates] = useState<CitiesState>({})
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
-  // Wizard state lives in sessionStorage keyed by companyId. If the user lands
-  // here directly (deeplink) without going through step 1, fall back to defaults
-  // so the page still works — they'll be able to «Изменить период» to pick.
+
   const wizard: WizardState = useMemo(
     () => (companyId ? loadWizardState(companyId) : null) ?? defaultWizardState(),
     [companyId],
   )
 
   const cities = companyQuery.data?.cities ?? []
-  const allDone = cities.length > 0 && cities.every((c) => cityStates[c]?.status === 'done')
-  // Все города дошли до финального состояния (или нашлось, или ошибка). Используется
-  // для разблокировки «Запустить анализ» — раньше требовалось ВСЕ done, и при
-  // ошибке/пустом результате хоть в одном городе кнопка вечно блокировалась.
   const allFinished = cities.length > 0 && cities.every((c) => {
     const s = cityStates[c]?.status
     return s === 'done' || s === 'error'
   })
   const hasMultipleCities = cities.length > 1
+  const currentSearchingCity = cities.find((c) => cityStates[c]?.status === 'searching')
+  const activeProvidersCount = countActiveProviders(cityStates)
 
   useEffect(() => {
     if (!companyId || cities.length === 0) return
-    // Restore previously selected branches if user is returning to this step
-    // (e.g. from «Изменить период» on step 1 or from step 3 back-nav).
-    if (wizard.selectedBranchIds && wizard.selectedBranchIds.length > 0) {
-      setSelected(new Set(wizard.selectedBranchIds))
-    }
-
     let cancelled = false
-    const initial: Record<string, CityState> = {}
+    const initial: CitiesState = {}
     for (const c of cities) initial[c] = { status: 'pending' }
     setCityStates(initial)
 
@@ -88,18 +91,14 @@ export default function BranchSearchPage() {
         if (cancelled) return
         setCityStates((prev) => ({ ...prev, [city]: { status: 'searching' } }))
         try {
-          // Search only across sources picked on step 1 — the backend defaults to «all»
-          // when sources is empty/undefined, so we must pass explicit list to honor the choice.
           const response = await companiesApi.search(companyId, city, wizard.sources)
           if (cancelled) return
           setCityStates((prev) => ({
             ...prev,
-            [city]: { status: 'done', sources: response.sources },
+            [city]: { status: 'done', layout: layoutFromSearchResponse(response) },
           }))
         } catch (err) {
           if (cancelled) return
-          // Web API кидает 502 + ProblemDetails{detail:"..."} при недоступном/упавшем
-          // парсере. describeApiError достанет detail из тела, иначе fallback на message.
           const message = describeApiError(err, 'Не удалось выполнить поиск')
           setCityStates((prev) => ({ ...prev, [city]: { status: 'error', message } }))
         }
@@ -109,48 +108,34 @@ export default function BranchSearchPage() {
     return () => {
       cancelled = true
     }
-  }, [companyId, cities.join('|')])
+  }, [companyId, cities.join('|'), wizard.sources.join('|')])
 
-  const currentSearchingCity = cities.find((c) => cityStates[c]?.status === 'searching')
-
-  const allItemsFlat = useMemo(() => {
-    const items: Array<{ city: string; item: BranchSearchResultItem }> = []
-    for (const city of cities) {
-      const state = cityStates[city]
-      if (state?.status !== 'done') continue
-      for (const group of state.sources) {
-        for (const it of group.items) items.push({ city, item: it })
-      }
-    }
-    return items
-  }, [cities, cityStates])
-
-  const toggle = (key: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
+  const updateLayout = (city: string, updater: (l: CityLayout) => CityLayout) => {
+    setCityStates((prev) => {
+      const s = prev[city]
+      if (s?.status !== 'done') return prev
+      return { ...prev, [city]: { status: 'done', layout: updater(s.layout) } }
     })
   }
 
   const onNext = async () => {
     if (!companyId) return
-    const branchIds = allItemsFlat
-      .filter(({ item }) => selected.has(item.id))
-      .map(({ item }) => item.id)
-    if (branchIds.length === 0) {
-      setSaveError('Выберите хотя бы одну точку, чтобы продолжить')
+    setSaveError(null)
+    if (activeProvidersCount === 0) {
+      setSaveError('Выберите хотя бы одну карточку, чтобы продолжить')
       return
     }
     setSaving(true)
-    setSaveError(null)
     try {
-      // Persist the selection on the company so step 3 (and re-entries to step 2)
-      // can render the picks even if sessionStorage is cleared. The actual analysis
-      // launch is going to happen on step 3 in a follow-up.
-      await companiesApi.saveBranches(companyId, branchIds)
-      saveWizardState(companyId, { ...wizard, selectedBranchIds: branchIds })
+      const payload = buildSavePayload(cityStates, cities)
+      await companiesApi.saveBranchGroups(companyId, payload)
+      // selectedBranchIds в wizard-state нужен step-3 чтобы отрисовать сводку.
+      const selectedIds: string[] = []
+      for (const g of payload.groups) {
+        if (!g.isSelected) continue
+        for (const p of g.providers) if (p.isEnabled) selectedIds.push(p.branchId)
+      }
+      saveWizardState(companyId, { ...wizard, selectedBranchIds: selectedIds })
       navigate(`/analyses/new/${companyId}/summary`)
     } catch (err) {
       setSaveError(describeApiError(err, 'Не удалось сохранить выбор'))
@@ -171,10 +156,12 @@ export default function BranchSearchPage() {
         <AnalysisStepper current={2} />
 
         <div className="mb-6">
-          <h1 className="text-h1 text-text-primary mb-2">Выберите ваши точки</h1>
+          <h1 className="text-h1 text-text-primary mb-2">Найденные филиалы</h1>
           <p className="text-body text-text-secondary">
-            Отметьте все карточки, относящиеся к вашему бизнесу. Это позволит системе собрать наиболее
-            точные данные.
+            Карточки с разных источников сгруппированы в физические филиалы. Внутри каждого
+            блока — отдельные чекбоксы по провайдерам, можно отключить лишний источник или
+            весь блок. Если автогруппировка ошиблась — используйте «Разгруппировать» или
+            раздел «Не удалось сгруппировать».
           </p>
         </div>
 
@@ -216,19 +203,18 @@ export default function BranchSearchPage() {
 
         {companyQuery.data && (
           <>
-            <div className="space-y-6">
+            <div className="space-y-8">
               {cities.map((city) => (
                 <CitySection
                   key={city}
                   city={city}
                   state={cityStates[city] ?? { status: 'pending' }}
-                  selected={selected}
-                  onToggle={toggle}
+                  onUpdate={(updater) => updateLayout(city, updater)}
                 />
               ))}
             </div>
 
-            {hasMultipleCities && !allDone && currentSearchingCity && (
+            {hasMultipleCities && !allFinished && currentSearchingCity && (
               <div className="mt-8 flex items-center gap-3 rounded-2xl border border-border-subtle bg-card px-5 py-4 shadow-sm">
                 <Loader2 className="text-brand animate-spin" size={20} />
                 <div className="text-sm text-text-primary">
@@ -245,7 +231,7 @@ export default function BranchSearchPage() {
 
             <div className="mt-8 flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="rounded-full bg-state-active-bg border border-brand/20 text-brand px-4 py-1.5 text-sm font-medium self-start sm:self-auto">
-                Выбрано: {selected.size} {selected.size === 1 ? 'точка' : 'точек'}
+                Активных карточек: {activeProvidersCount}
               </div>
               <div className="flex items-center justify-end gap-3">
                 <Button
@@ -256,12 +242,7 @@ export default function BranchSearchPage() {
                 </Button>
                 <Button
                   onClick={onNext}
-                  // Требуем чтобы все города дошли до финального состояния (done или error),
-                  // но не требуем чтобы ВСЕ они нашли что-то. Если хоть один город дал
-                  // результаты и юзер что-то выбрал — можно идти дальше, упавшие/пустые
-                  // города при сохранении просто проигнорируются (saveBranches принимает
-                  // только выбранные ids).
-                  disabled={!allFinished || saving || selected.size === 0}
+                  disabled={!allFinished || saving || activeProvidersCount === 0}
                   className="gap-2"
                 >
                   {saving ? 'Сохраняем…' : 'Далее'}
@@ -276,16 +257,16 @@ export default function BranchSearchPage() {
   )
 }
 
+// ----- City section -----
+
 function CitySection({
   city,
   state,
-  selected,
-  onToggle,
+  onUpdate,
 }: {
   city: string
   state: CityState
-  selected: Set<string>
-  onToggle: (key: string) => void
+  onUpdate: (updater: (l: CityLayout) => CityLayout) => void
 }) {
   return (
     <section>
@@ -296,7 +277,9 @@ function CitySection({
         </h2>
         {state.status === 'done' && (
           <span className="text-sm text-text-tertiary">
-            Найдено: {state.sources.reduce((acc, g) => acc + g.items.length, 0)}
+            Группы: {state.layout.groups.length}{' '}
+            {state.layout.unmatchedBranchIds.length > 0 &&
+              `· Несгруппировано: ${state.layout.unmatchedBranchIds.length}`}
           </span>
         )}
       </header>
@@ -319,138 +302,386 @@ function CitySection({
           </div>
         </Card>
       )}
-      {state.status === 'done' && totalFoundInState(state) === 0 && (
-        <Card className="p-5 space-y-2 text-sm text-text-tertiary">
-          <div>Ничего не найдено в этом городе.</div>
-          <div>
-            Возможно, парсер не сматчил название. Проверьте правильность ввода или
-            удалите этот город из анкеты компании.
-          </div>
-        </Card>
-      )}
-      {state.status === 'done' && totalFoundInState(state) > 0 && (
-        <div className="space-y-3">
-          {state.sources.map((group) => (
-            <SourceGroup
-              key={group.source}
-              group={group}
-              selected={selected}
-              onToggle={onToggle}
-            />
-          ))}
-        </div>
+      {state.status === 'done' && (
+        <CityLayoutView layout={state.layout} city={city} onUpdate={onUpdate} />
       )}
     </section>
   )
 }
 
-function SourceGroup({
-  group,
-  selected,
-  onToggle,
+function CityLayoutView({
+  layout,
+  city,
+  onUpdate,
 }: {
-  group: BranchSearchSourceGroup
-  selected: Set<string>
-  onToggle: (key: string) => void
+  layout: CityLayout
+  city: string
+  onUpdate: (updater: (l: CityLayout) => CityLayout) => void
 }) {
-  const meta = SOURCE_META[group.source] ?? { label: group.source, color: 'bg-page-bg text-text-secondary' }
-  return (
-    <Card className="overflow-hidden">
-      <div className="flex items-center justify-between px-5 py-3 bg-page-bg border-b border-border-subtle">
-        <div className="flex items-center gap-2">
-          <span className={cn('inline-flex items-center justify-center w-6 h-6 rounded text-xs font-bold', meta.color)}>
-            {meta.label.charAt(0)}
-          </span>
-          <span className="text-sm font-medium text-text-primary">{meta.label}</span>
+  const isEmpty =
+    layout.groups.length === 0 &&
+    layout.unmatchedBranchIds.length === 0 &&
+    layout.ignoredBranchIds.length === 0
+  if (isEmpty) {
+    return (
+      <Card className="p-5 space-y-2 text-sm text-text-tertiary">
+        <div>Ничего не найдено в этом городе.</div>
+        <div>
+          Возможно, парсер не сматчил название. Проверьте правильность ввода или удалите этот
+          город из анкеты компании.
         </div>
-        <span className="text-xs text-text-tertiary">
-          {group.items.length === 0
-            ? 'Ничего не найдено'
-            : `Найдено ${group.items.length} ${pluralizePoints(group.items.length)}`}
-        </span>
-      </div>
-      {group.items.length > 0 && (
-        <ul className="divide-y divide-border-subtle">
-          {group.items.map((item) => {
-            const key = item.id
-            const checked = selected.has(key)
-            return (
-              <li key={key}>
-                <label
-                  className={cn(
-                    'flex items-center gap-4 px-5 py-3 cursor-pointer transition-colors',
-                    checked ? 'bg-state-active-bg/40' : 'hover:bg-page-bg/60',
-                  )}
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => onToggle(key)}
-                    className="h-4 w-4 rounded border-border-subtle text-brand focus:ring-ring"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-text-primary truncate">{item.name}</div>
-                    {item.address && (
-                      <div className="text-xs text-text-tertiary truncate">{item.address}</div>
-                    )}
-                  </div>
-                  {item.rating !== null && (
-                    <div className="flex items-center gap-1 text-sm text-text-secondary shrink-0">
-                      <Star size={14} className="text-amber-500 fill-amber-500" />
-                      <span className="font-medium text-text-primary">{item.rating.toFixed(1)}</span>
-                      {item.reviewCount !== null && (
-                        <span className="text-xs text-text-tertiary">
-                          {/*
-                            Везде показываем «оценок» — единообразный лейбл для всех источников.
-                            Для Google realReviewsCount === reviewCount, поэтому второй кусок
-                            («· M отзывов») сам собой не покажется.
-                          */}
-                          {item.reviewCount.toLocaleString('ru-RU')} {pluralizeRatings(item.reviewCount)}
-                          {item.realReviewsCount !== null && item.realReviewsCount !== item.reviewCount && (
-                            <> · {item.realReviewsCount.toLocaleString('ru-RU')} {pluralizeReviews(item.realReviewsCount)}</>
-                          )}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </label>
-              </li>
-            )
-          })}
-        </ul>
+      </Card>
+    )
+  }
+  return (
+    <div className="space-y-4">
+      {layout.groups.length > 0 && (
+        <div className="space-y-3">
+          {layout.groups.map((g) => (
+            <LogicalBranchBlock
+              key={g.key}
+              group={g}
+              layout={layout}
+              onToggleMain={(isSelected) =>
+                onUpdate((l) => setGroupSelected(l, g.key, isSelected))
+              }
+              onToggleProvider={(branchId, isEnabled) =>
+                onUpdate((l) => setProviderEnabled(l, g.key, branchId, isEnabled))
+              }
+              onUngroup={() => onUpdate((l) => ungroup(l, g.key))}
+            />
+          ))}
+        </div>
       )}
+
+      {layout.unmatchedBranchIds.length > 0 && (
+        <UnmatchedSection
+          layout={layout}
+          city={city}
+          onAttach={(branchId, key) => onUpdate((l) => attachToGroup(l, branchId, key))}
+          onCreate={(branchId) => onUpdate((l) => createGroupFromUnmatched(l, branchId))}
+          onIgnore={(branchId) => onUpdate((l) => ignoreUnmatched(l, branchId))}
+        />
+      )}
+
+      {layout.ignoredBranchIds.length > 0 && (
+        <IgnoredSection
+          layout={layout}
+          onRestore={(branchId) => onUpdate((l) => unignore(l, branchId))}
+        />
+      )}
+    </div>
+  )
+}
+
+// ----- Logical branch block -----
+
+function LogicalBranchBlock({
+  group,
+  layout,
+  onToggleMain,
+  onToggleProvider,
+  onUngroup,
+}: {
+  group: ClientGroup
+  layout: CityLayout
+  onToggleMain: (v: boolean) => void
+  onToggleProvider: (branchId: string, v: boolean) => void
+  onUngroup: () => void
+}) {
+  const isCustom = group.key.startsWith('custom-')
+  return (
+    <Card className={cn('overflow-hidden', !group.isSelected && 'opacity-60')}>
+      <div className="flex items-start justify-between gap-3 px-5 py-3 bg-page-bg border-b border-border-subtle">
+        <label className="flex items-start gap-3 cursor-pointer flex-1 min-w-0">
+          <input
+            type="checkbox"
+            checked={group.isSelected}
+            onChange={(e) => onToggleMain(e.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-border-subtle text-brand focus:ring-ring"
+          />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="text-sm font-semibold text-text-primary truncate">{group.name}</div>
+              {!isCustom && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <Sparkles size={10} /> Автогруппировка
+                </span>
+              )}
+              {isCustom && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-200">
+                  Создан вручную
+                </span>
+              )}
+            </div>
+            {group.address && (
+              <div className="text-xs text-text-tertiary mt-0.5 truncate">{group.address}</div>
+            )}
+          </div>
+        </label>
+        <button
+          type="button"
+          onClick={onUngroup}
+          className="shrink-0 inline-flex items-center gap-1 text-xs text-text-tertiary hover:text-destructive transition-colors"
+          title="Разбить на отдельные карточки"
+        >
+          <Ungroup size={14} />
+          Разгруппировать
+        </button>
+      </div>
+      <ul className="divide-y divide-border-subtle">
+        {group.providers.map((p) => {
+          const card = layout.cardsById[p.branchId]
+          if (!card) return null
+          const meta =
+            SOURCE_META[card.source] ?? { label: card.source, color: 'bg-page-bg text-text-secondary' }
+          return (
+            <li
+              key={p.branchId}
+              className={cn(
+                'flex items-center gap-4 px-5 py-3 transition-colors',
+                !group.isSelected && 'pointer-events-none',
+                p.isEnabled && group.isSelected ? 'bg-card' : 'bg-card/60',
+              )}
+            >
+              <input
+                type="checkbox"
+                checked={p.isEnabled}
+                disabled={!group.isSelected}
+                onChange={(e) => onToggleProvider(p.branchId, e.target.checked)}
+                className="h-4 w-4 rounded border-border-subtle text-brand focus:ring-ring"
+              />
+              <span
+                className={cn(
+                  'inline-flex items-center justify-center px-2 py-0.5 rounded text-[11px] font-semibold shrink-0',
+                  meta.color,
+                )}
+              >
+                {meta.label}
+              </span>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-text-primary truncate">{card.name}</div>
+                {card.address && (
+                  <div className="text-xs text-text-tertiary truncate">{card.address}</div>
+                )}
+              </div>
+              {card.rating !== null && (
+                <div className="hidden sm:flex items-center gap-1 text-sm text-text-secondary shrink-0">
+                  <Star size={14} className="text-amber-500 fill-amber-500" />
+                  <span className="font-medium text-text-primary">{card.rating.toFixed(1)}</span>
+                  {card.reviewCount !== null && (
+                    <span className="text-xs text-text-tertiary">
+                      {card.reviewCount.toLocaleString('ru-RU')}
+                    </span>
+                  )}
+                </div>
+              )}
+              {card.externalUrl && (
+                <a
+                  href={card.externalUrl}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="shrink-0 inline-flex items-center gap-1 text-xs text-brand hover:text-brand-hover"
+                  title="Открыть оригинальную карточку"
+                >
+                  <ExternalLink size={12} />
+                  Открыть
+                </a>
+              )}
+            </li>
+          )
+        })}
+      </ul>
     </Card>
   )
 }
 
-// «Ничего не найдено» = ни в одной source-группе нет items. Просто
-// state.sources.length === 0 не годится: бэк возвращает все запрошенные источники
-// как пустые группы, длина массива остаётся ≥ 1.
-function totalFoundInState(state: { status: 'done'; sources: BranchSearchSourceGroup[] }): number {
-  return state.sources.reduce((acc, g) => acc + g.items.length, 0)
+// ----- Unmatched section -----
+
+function UnmatchedSection({
+  layout,
+  city,
+  onAttach,
+  onCreate,
+  onIgnore,
+}: {
+  layout: CityLayout
+  city: string
+  onAttach: (branchId: string, key: string) => void
+  onCreate: (branchId: string) => void
+  onIgnore: (branchId: string) => void
+}) {
+  return (
+    <div>
+      <div className="mb-2 px-1 text-xs uppercase tracking-wide text-text-tertiary">
+        Не удалось сгруппировать автоматически · {city}
+      </div>
+      <Card className="overflow-hidden border-amber-100">
+        <div className="px-5 py-3 bg-amber-50/60 border-b border-amber-100 text-xs text-amber-900">
+          Эти карточки автоматика не смогла привязать к существующим группам. Для каждой
+          выберите: «Привязать к филиалу», «Создать новый филиал» или «Игнорировать».
+        </div>
+        <ul className="divide-y divide-border-subtle">
+          {layout.unmatchedBranchIds.map((branchId) => {
+            const card = layout.cardsById[branchId]
+            if (!card) return null
+            return (
+              <UnmatchedCardRow
+                key={branchId}
+                card={card}
+                groups={layout.groups}
+                onAttach={(key) => onAttach(branchId, key)}
+                onCreate={() => onCreate(branchId)}
+                onIgnore={() => onIgnore(branchId)}
+              />
+            )
+          })}
+        </ul>
+      </Card>
+    </div>
+  )
 }
 
-function pluralizePoints(n: number) {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  if (mod10 === 1 && mod100 !== 11) return 'точка'
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'точки'
-  return 'точек'
+function UnmatchedCardRow({
+  card,
+  groups,
+  onAttach,
+  onCreate,
+  onIgnore,
+}: {
+  card: BranchSearchResultItem
+  groups: ClientGroup[]
+  onAttach: (key: string) => void
+  onCreate: () => void
+  onIgnore: () => void
+}) {
+  const meta =
+    SOURCE_META[card.source] ?? { label: card.source, color: 'bg-page-bg text-text-secondary' }
+  const onSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const v = e.target.value
+    if (!v) return
+    if (v === '__create__') onCreate()
+    else if (v === '__ignore__') onIgnore()
+    else onAttach(v)
+    // Reset to placeholder — иначе при следующем рендере select висит на выбранном option.
+    e.target.value = ''
+  }
+
+  return (
+    <li className="flex items-center gap-3 px-5 py-3">
+      <span
+        className={cn(
+          'inline-flex items-center justify-center px-2 py-0.5 rounded text-[11px] font-semibold shrink-0',
+          meta.color,
+        )}
+      >
+        {meta.label}
+      </span>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm text-text-primary truncate">{card.name}</div>
+        {card.address && (
+          <div className="text-xs text-text-tertiary truncate">{card.address}</div>
+        )}
+      </div>
+      {card.rating !== null && (
+        <div className="hidden sm:flex items-center gap-1 text-sm text-text-secondary shrink-0">
+          <Star size={14} className="text-amber-500 fill-amber-500" />
+          <span className="font-medium text-text-primary">{card.rating.toFixed(1)}</span>
+          {card.reviewCount !== null && (
+            <span className="text-xs text-text-tertiary">
+              {card.reviewCount.toLocaleString('ru-RU')}
+            </span>
+          )}
+        </div>
+      )}
+      {card.externalUrl && (
+        <a
+          href={card.externalUrl}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="hidden sm:inline-flex shrink-0 items-center gap-1 text-xs text-brand hover:text-brand-hover"
+        >
+          <ExternalLink size={12} />
+          Открыть
+        </a>
+      )}
+      <select
+        value=""
+        onChange={onSelect}
+        className="h-9 px-2 rounded-md border border-border-subtle bg-card text-xs text-text-primary focus:outline-none focus:ring-2 focus:ring-ring max-w-[220px]"
+      >
+        <option value="" disabled>
+          Действие…
+        </option>
+        {groups.length > 0 && (
+          <optgroup label="Привязать к филиалу">
+            {groups.map((g) => (
+              <option key={g.key} value={g.key}>
+                {truncate(g.name, 40)}
+              </option>
+            ))}
+          </optgroup>
+        )}
+        <option value="__create__">Создать новый филиал</option>
+        <option value="__ignore__">Игнорировать</option>
+      </select>
+    </li>
+  )
 }
 
-function pluralizeReviews(n: number) {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  if (mod10 === 1 && mod100 !== 11) return 'отзыв'
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'отзыва'
-  return 'отзывов'
+// ----- Ignored section -----
+
+function IgnoredSection({
+  layout,
+  onRestore,
+}: {
+  layout: CityLayout
+  onRestore: (branchId: string) => void
+}) {
+  return (
+    <div>
+      <div className="mb-2 px-1 text-xs uppercase tracking-wide text-text-tertiary">
+        Игнорируется · {layout.ignoredBranchIds.length}
+      </div>
+      <Card className="overflow-hidden border-border-subtle">
+        <ul className="divide-y divide-border-subtle">
+          {layout.ignoredBranchIds.map((branchId) => {
+            const card = layout.cardsById[branchId]
+            if (!card) return null
+            const meta =
+              SOURCE_META[card.source] ?? { label: card.source, color: 'bg-page-bg text-text-secondary' }
+            return (
+              <li key={branchId} className="flex items-center gap-3 px-5 py-2.5 text-text-tertiary">
+                <span
+                  className={cn(
+                    'inline-flex items-center justify-center px-2 py-0.5 rounded text-[11px] font-semibold shrink-0 opacity-60',
+                    meta.color,
+                  )}
+                >
+                  {meta.label}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm truncate">{card.name}</div>
+                  {card.address && <div className="text-xs truncate">{card.address}</div>}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onRestore(branchId)}
+                  className="text-xs text-brand hover:text-brand-hover inline-flex items-center gap-1"
+                >
+                  <X size={12} />
+                  Вернуть
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      </Card>
+    </div>
+  )
 }
 
-// Для «N оценок» (rating votes — 2GIS/Yandex счётчик рядом с рейтингом).
-function pluralizeRatings(n: number) {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  if (mod10 === 1 && mod100 !== 11) return 'оценка'
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'оценки'
-  return 'оценок'
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s
+  return s.slice(0, max - 1) + '…'
 }

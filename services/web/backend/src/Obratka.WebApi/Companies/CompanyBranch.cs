@@ -14,7 +14,14 @@ public class CompanyBranch
     public string City { get; set; } = string.Empty;
     public double? Rating { get; set; }
     public int? ReviewCount { get; set; }
-    // false = candidate (found by search, not picked by user yet); true = confirmed by user on step 2.
+    // Опц. координаты карточки — пока null (парсер не отдаёт). Заложено под ADR-следующее.
+    public double? Latitude { get; set; }
+    public double? Longitude { get; set; }
+    // false = candidate (found by search, not picked by user yet) OR provider explicitly disabled
+    // inside its logical branch on step 2. true = enabled within its LogicalBranch.
     public bool IsSelected { get; set; }
+    // Привязка к логическому филиалу. null = карточка ещё не сгруппирована (unmatched)
+    // или помечена «Игнорировать» пользователем.
+    public Guid? LogicalBranchId { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

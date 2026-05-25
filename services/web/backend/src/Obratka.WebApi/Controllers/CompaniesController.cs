@@ -206,6 +206,162 @@ public sealed class CompaniesController(
         return Ok(branches);
     }
 
+    // Step 2 submit: пересохраняет всю группировку компании (логические филиалы + привязка
+    // карточек). Старые LogicalBranch для этой компании удаляются — соответствующие
+    // CompanyBranch.LogicalBranchId сбросятся в null через FK on-delete SetNull. Запрос
+    // приходит с фронта целиком — мы не делаем «дельту».
+    [HttpPost("{id:guid}/branches/save-groups")]
+    [ProducesResponseType(typeof(IReadOnlyList<LogicalBranchDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<IReadOnlyList<LogicalBranchDto>>> SaveBranchGroups(
+        Guid id, [FromBody] SaveBranchGroupsRequest request, CancellationToken ct)
+    {
+        var ownerId = GetUserIdOrNull();
+        if (ownerId is null) return Unauthorized();
+
+        var company = await db.Companies
+            .Include(c => c.Branches)
+            .SingleOrDefaultAsync(c => c.Id == id && c.OwnerUserId == ownerId, ct);
+        if (company is null) return NotFound();
+
+        var ownedBranchIds = company.Branches.Select(b => b.Id).ToHashSet();
+        var providersInRequest = request.Groups
+            .SelectMany(g => g.Providers)
+            .Select(p => p.BranchId)
+            .ToHashSet();
+        var ignored = request.IgnoredBranchIds.ToHashSet();
+
+        // Любой branchId, который пришёл в request, должен быть нашим — иначе юзер
+        // фальсифицирует данные. Дублировать карточку между группой и ignored нельзя.
+        var allRequested = new HashSet<Guid>(providersInRequest);
+        foreach (var ig in ignored) allRequested.Add(ig);
+        var unknown = allRequested.Where(b => !ownedBranchIds.Contains(b)).ToList();
+        if (unknown.Count > 0)
+            return BadRequest(new { error = $"Branch ids do not belong to this company: {string.Join(", ", unknown)}" });
+
+        var duplicates = request.IgnoredBranchIds.Intersect(providersInRequest).ToList();
+        if (duplicates.Count > 0)
+            return BadRequest(new { error = $"Branch ids appear both in groups and ignored: {string.Join(", ", duplicates)}" });
+
+        // 1. Сносим старые LogicalBranch для этой компании. CompanyBranch.LogicalBranchId
+        //    автоматически сбросится в null (SetNull on delete).
+        var existingLogical = await db.LogicalBranches
+            .Where(lb => lb.CompanyId == id)
+            .ToListAsync(ct);
+        if (existingLogical.Count > 0)
+            db.LogicalBranches.RemoveRange(existingLogical);
+
+        // 2. Создаём новые LogicalBranch'ы и параллельно собираем мапу
+        //    CompanyBranch.Id -> (LogicalBranchId, IsEnabled).
+        var assignments = new Dictionary<Guid, (Guid? LogicalId, bool IsEnabled)>();
+        var newLogicalBranches = new List<LogicalBranch>(request.Groups.Count);
+        var now = DateTimeOffset.UtcNow;
+
+        foreach (var grp in request.Groups)
+        {
+            if (grp.Providers.Count == 0)
+                return BadRequest(new { error = "Group must contain at least one provider" });
+
+            var logical = new LogicalBranch
+            {
+                CompanyId = id,
+                Name = grp.Name.Trim(),
+                Address = grp.Address.Trim(),
+                City = grp.City.Trim(),
+                IsSelected = grp.IsSelected,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            newLogicalBranches.Add(logical);
+
+            foreach (var prov in grp.Providers)
+            {
+                if (assignments.ContainsKey(prov.BranchId))
+                    return BadRequest(new { error = $"Branch id {prov.BranchId} appears in more than one group" });
+                assignments[prov.BranchId] = (logical.Id, prov.IsEnabled);
+            }
+        }
+
+        foreach (var ig in request.IgnoredBranchIds)
+            assignments[ig] = (null, false);
+
+        db.LogicalBranches.AddRange(newLogicalBranches);
+
+        // 3. Применяем мапу к карточкам компании. Карточки, которых нет в запросе —
+        //    остаются с предыдущим LogicalBranchId (а он удалён, FK SetNull) и
+        //    IsSelected = false, т.е. фактически unmatched. Это намеренно: фронт всегда
+        //    шлёт ВСЕ карточки текущего поиска в запрос; то что в запрос не попало —
+        //    кандидат вне нынешней группировки, не должен влиять на анализ.
+        foreach (var branch in company.Branches)
+        {
+            if (assignments.TryGetValue(branch.Id, out var asn))
+            {
+                branch.LogicalBranchId = asn.LogicalId;
+                branch.IsSelected = asn.IsEnabled;
+            }
+            else
+            {
+                // Карточка не упомянута — снимаем привязку и selection. Может произойти,
+                // если фронт ничего о ней не знает (например, она от другого города).
+                branch.LogicalBranchId = null;
+                branch.IsSelected = false;
+            }
+        }
+
+        company.UpdatedAt = now;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(BuildLogicalBranchDtos(newLogicalBranches, company.Branches));
+    }
+
+    [HttpGet("{id:guid}/groups")]
+    [ProducesResponseType(typeof(IReadOnlyList<LogicalBranchDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<IReadOnlyList<LogicalBranchDto>>> ListGroups(Guid id, CancellationToken ct)
+    {
+        var ownerId = GetUserIdOrNull();
+        if (ownerId is null) return Unauthorized();
+
+        var exists = await db.Companies
+            .AnyAsync(c => c.Id == id && c.OwnerUserId == ownerId, ct);
+        if (!exists) return NotFound();
+
+        var logical = await db.LogicalBranches.AsNoTracking()
+            .Where(lb => lb.CompanyId == id)
+            .OrderBy(lb => lb.City).ThenBy(lb => lb.Name)
+            .ToListAsync(ct);
+
+        var providers = await db.CompanyBranches.AsNoTracking()
+            .Where(b => b.CompanyId == id && b.LogicalBranchId != null)
+            .ToListAsync(ct);
+
+        return Ok(BuildLogicalBranchDtos(logical, providers));
+    }
+
+    private static IReadOnlyList<LogicalBranchDto> BuildLogicalBranchDtos(
+        IEnumerable<LogicalBranch> logicalBranches,
+        IEnumerable<CompanyBranch> branches)
+    {
+        var byLogical = branches
+            .Where(b => b.LogicalBranchId.HasValue)
+            .GroupBy(b => b.LogicalBranchId!.Value)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        return logicalBranches.Select(lb =>
+        {
+            var cards = byLogical.TryGetValue(lb.Id, out var list)
+                ? list.OrderBy(b => b.Source).ToList()
+                : new List<CompanyBranch>();
+
+            return new LogicalBranchDto(
+                lb.Id, lb.Name, lb.Address, lb.City, lb.IsSelected,
+                cards.Select(b => new LogicalBranchProviderDto(
+                    b.Id, b.Source, b.ExternalId, b.ExternalUrl, b.Name, b.Address,
+                    b.Rating, b.ReviewCount, b.IsSelected)).ToList());
+        }).ToList();
+    }
+
     private Guid? GetUserIdOrNull()
     {
         var id = userManager.GetUserId(User);
