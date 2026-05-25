@@ -49,11 +49,17 @@ export function DashboardFiltersProvider({
   header: DashboardHeaderDto
   children: ReactNode
 }) {
-  // Defaults: всё включено. Период — из шапки (если null, останется null = «весь период»).
+  // Defaults: всё включено. Период по умолчанию = null/null («с самого начала»),
+  // карточки показывают baseline за весь период джоба.
+  // НЕ берём header.periodFrom/To — там лежит Company.DraftPeriodFrom/To
+  // (caveat §9: реального периода джоба нигде нет), это «настройки следующего
+  // анализа», обычно узкое окно, которое сбивало бы дефолт фильтра.
+  // Когда в Processing-Gateway появится period_from/to на analysis_jobs
+  // (processing-gateway-todo.md #1) — заменим на честный период джоба.
   const initial = useMemo<DashboardFiltersValue>(
     () => ({
-      periodFrom: header.periodFrom,
-      periodTo: header.periodTo,
+      periodFrom: null,
+      periodTo: null,
       sources: header.sources.slice(),
       branches: header.branches.map((b) => b.branchId),
       topics: [],
