@@ -21,9 +21,8 @@ import { cn } from '@/lib/utils'
 import { AnalysisStepper } from './AnalysisStepper'
 import {
   clearWizardState,
-  defaultWizardState,
+  effectiveWizardState,
   formatPeriodSummary,
-  loadWizardState,
   type WizardState,
 } from './wizardState'
 
@@ -39,16 +38,16 @@ export default function AnalysisSummaryPage() {
   const [launching, setLaunching] = useState(false)
   const [launchError, setLaunchError] = useState<string | null>(null)
 
-  const wizard: WizardState = useMemo(
-    () => (companyId ? loadWizardState(companyId) : null) ?? defaultWizardState(),
-    [companyId],
-  )
-
   const companyQuery = useQuery({
     queryKey: ['company', companyId],
     queryFn: () => companiesApi.get(companyId!),
     enabled: !!companyId,
   })
+
+  const wizard: WizardState = useMemo(
+    () => effectiveWizardState(companyId ?? null, companyQuery.data ?? null),
+    [companyId, companyQuery.data],
+  )
 
   const groupsQuery = useQuery({
     queryKey: ['company', companyId, 'groups'],

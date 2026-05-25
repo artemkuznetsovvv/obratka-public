@@ -1,7 +1,15 @@
-// Transit-only state for the new-analysis wizard. NOT a domain entity.
-// Lives in sessionStorage keyed by companyId so user keeps period/sources
-// across F5 and across step transitions, but tab close wipes it. Real
-// persistence of these parameters happens on AnalysisJob in PG at launch.
+// Transit state for the new-analysis wizard.
+//
+// Двухслойная персистентность:
+//  1. sessionStorage (быстрый кэш в пределах сессии) — основной путь чтения/записи
+//     во время прохождения мастера. Очищается при закрытии вкладки.
+//  2. Company.draftPeriodFrom/To/Sources (БД) — переживает закрытие вкладки/девайс,
+//     заполняется на step 1 submit. Если пользак вернётся через неделю, поднимаем
+//     отсюда. Источник истины для cross-session continuity.
+//
+// Чтение: effectiveWizardState(companyId, company) сначала смотрит sessionStorage,
+// fallback'ом разворачивает Company.draft*. Запись: на step 1 submit пишем И в
+// sessionStorage, И в Company (через CreateCompanyRequest).
 
 export type AnalysisPeriod =
   | { kind: 'since-beginning' }
@@ -49,6 +57,54 @@ export function clearWizardState(companyId: string): void {
   } catch {
     // ignore
   }
+}
+
+// Чтение «эффективного» состояния: sessionStorage > Company.draft* > defaults.
+// `company` опционально — если фронт ещё не загрузил CompanyDto, поведение как раньше.
+interface CompanyDraftFields {
+  draftPeriodFrom: string | null
+  draftPeriodTo: string | null
+  draftSources: string[] | null
+  selectedBranchIds?: string[]
+}
+
+export function effectiveWizardState(
+  companyId: string | null,
+  company: CompanyDraftFields | null,
+): WizardState {
+  if (companyId) {
+    const session = loadWizardState(companyId)
+    if (session) return session
+  }
+  if (company) {
+    const period: AnalysisPeriod =
+      company.draftPeriodFrom && company.draftPeriodTo
+        ? {
+            kind: 'range',
+            // backend хранит DateTimeOffset (ISO с time/tz). PeriodPicker и сам формат
+            // wizardState ожидают yyyy-mm-dd — берём первые 10 символов.
+            from: company.draftPeriodFrom.slice(0, 10),
+            to: company.draftPeriodTo.slice(0, 10),
+          }
+        : { kind: 'since-beginning' }
+    const sources =
+      company.draftSources && company.draftSources.length > 0
+        ? company.draftSources
+        : [...DEFAULT_SOURCES]
+    return { period, sources }
+  }
+  return defaultWizardState()
+}
+
+// Конвертация period → ISO для отправки в CreateCompanyRequest. «С самого начала» = null/null.
+export function periodToDraftPayload(period: AnalysisPeriod): {
+  draftPeriodFrom: string | null
+  draftPeriodTo: string | null
+} {
+  if (period.kind !== 'range' || !period.from || !period.to) {
+    return { draftPeriodFrom: null, draftPeriodTo: null }
+  }
+  return { draftPeriodFrom: period.from, draftPeriodTo: period.to }
 }
 
 export function formatPeriodSummary(period: AnalysisPeriod): string {

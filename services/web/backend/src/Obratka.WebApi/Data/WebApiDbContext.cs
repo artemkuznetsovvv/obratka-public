@@ -45,6 +45,7 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
             b.Property(x => x.Subcategory).HasMaxLength(100);
             b.Property(x => x.Description).HasMaxLength(4000);
             b.Property(x => x.Cities).HasColumnType("text[]");
+            b.Property(x => x.DraftSources).HasColumnType("text[]");
             b.HasIndex(x => x.OwnerUserId);
             b.HasOne<ApplicationUser>()
                 .WithMany()

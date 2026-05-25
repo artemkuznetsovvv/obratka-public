@@ -1,16 +1,26 @@
 import { useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, Building2, CalendarRange, Plus, RefreshCcw } from 'lucide-react'
+import {
+  ArrowRight,
+  Building2,
+  CalendarRange,
+  ChevronRight,
+  FileEdit,
+  Layers,
+  Plus,
+  RefreshCcw,
+} from 'lucide-react'
 import { AppLayout } from '@/layouts/AppLayout'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { analysesApi, type AnalysisJob } from '@/api/analyses'
-import { companiesApi } from '@/api/companies'
+import { companiesApi, type CompanyDto } from '@/api/companies'
 import { cn } from '@/lib/utils'
 import {
   approximateProgress,
   isTerminal,
+  SOURCE_LABEL,
   statusMetaFor,
 } from './analysisStatus'
 
@@ -46,6 +56,19 @@ export default function HistoryListPage() {
 
   const items = analysesQuery.data?.items ?? []
 
+  // «Черновики» = компании с уже сгруппированными филиалами, по которым ещё ни разу
+  // не запускался анализ. Юзер мог дойти до шага 3 и закрыть вкладку — пусть видит
+  // entry-point чтобы вернуться и продолжить.
+  const drafts = useMemo<CompanyDto[]>(() => {
+    const companies = companiesQuery.data ?? []
+    if (companies.length === 0) return []
+    const companiesWithJobs = new Set<string>()
+    for (const j of items) companiesWithJobs.add(j.companyId)
+    return companies.filter(
+      (c) => c.logicalBranchCount > 0 && !companiesWithJobs.has(c.id),
+    )
+  }, [companiesQuery.data, items])
+
   return (
     <AppLayout breadcrumbs={[{ label: 'История анализов' }]}>
       <div className="max-w-4xl mx-auto">
@@ -62,13 +85,27 @@ export default function HistoryListPage() {
           </Button>
         </div>
 
+        {drafts.length > 0 && (
+          <section className="mb-8">
+            <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-text-tertiary">
+              <FileEdit size={12} />
+              Продолжить настройку
+            </div>
+            <div className="space-y-2">
+              {drafts.map((c) => (
+                <DraftCard key={c.id} company={c} />
+              ))}
+            </div>
+          </section>
+        )}
+
         {analysesQuery.isLoading ? (
           <Card className="p-8 text-text-secondary">Загружаем историю…</Card>
         ) : analysesQuery.isError ? (
           <Card className="p-8 text-destructive">
             Не удалось загрузить историю: {(analysesQuery.error as Error).message}
           </Card>
-        ) : items.length === 0 ? (
+        ) : items.length === 0 && drafts.length === 0 ? (
           <Card className="p-10 text-center">
             <div className="text-text-primary text-h3 mb-2">Анализов пока нет</div>
             <div className="text-sm text-text-secondary mb-6">
@@ -79,7 +116,7 @@ export default function HistoryListPage() {
               Запустить первый анализ
             </Button>
           </Card>
-        ) : (
+        ) : items.length === 0 ? null : (
           <div className="space-y-3">
             {items.map((job) => (
               <AnalysisCard key={job.id} job={job} companyName={companyName(job.companyId)} />
@@ -150,6 +187,67 @@ function AnalysisCard({ job, companyName }: { job: AnalysisJob; companyName: str
       </Card>
     </Link>
   )
+}
+
+function DraftCard({ company }: { company: CompanyDto }) {
+  const periodLabel = formatDraftPeriod(company.draftPeriodFrom, company.draftPeriodTo)
+  const sourcesLabel = (company.draftSources && company.draftSources.length > 0
+    ? company.draftSources
+    : []
+  )
+    .map((s) => SOURCE_LABEL[s] ?? s)
+    .join(', ')
+
+  return (
+    <Link to={`/analyses/new/${company.id}/summary`} className="block group">
+      <Card className="p-4 transition-colors group-hover:border-brand/40 border-dashed">
+        <div className="flex items-center gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <Building2 size={14} className="text-text-tertiary shrink-0" />
+              <span className="text-sm font-semibold text-text-primary truncate">
+                {company.name}
+              </span>
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-800 border border-amber-200 shrink-0">
+                Черновик
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-tertiary">
+              <span className="inline-flex items-center gap-1">
+                <Layers size={12} />
+                {company.logicalBranchCount}{' '}
+                {pluralizeBranches(company.logicalBranchCount)}
+              </span>
+              {periodLabel && (
+                <span className="inline-flex items-center gap-1">
+                  <CalendarRange size={12} />
+                  {periodLabel}
+                </span>
+              )}
+              {sourcesLabel && <span className="truncate">{sourcesLabel}</span>}
+            </div>
+          </div>
+          <span className="hidden sm:inline-flex items-center gap-1 text-sm font-medium text-brand group-hover:text-brand-hover transition-colors shrink-0">
+            Продолжить
+            <ChevronRight size={14} />
+          </span>
+        </div>
+      </Card>
+    </Link>
+  )
+}
+
+function formatDraftPeriod(from: string | null, to: string | null): string | null {
+  if (!from || !to) return 'С самого начала'
+  return `${from.slice(0, 10).split('-').reverse().join('.')} — ${to.slice(0, 10).split('-').reverse().join('.')}`
+}
+
+function pluralizeBranches(n: number): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return 'филиал'
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'филиала'
+  return 'филиалов'
 }
 
 function ProgressBar({

@@ -33,10 +33,9 @@ import { describeApiError } from '@/api/errors'
 import { cn } from '@/lib/utils'
 import { AnalysisStepper } from './AnalysisStepper'
 import {
-  defaultWizardState,
+  effectiveWizardState,
   formatPeriodSummary,
   formatSourcesSummary,
-  loadWizardState,
   saveWizardState,
   type WizardState,
 } from './wizardState'
@@ -80,8 +79,8 @@ export default function BranchSearchPage() {
   const [saveError, setSaveError] = useState<string | null>(null)
 
   const wizard: WizardState = useMemo(
-    () => (companyId ? loadWizardState(companyId) : null) ?? defaultWizardState(),
-    [companyId],
+    () => effectiveWizardState(companyId ?? null, companyQuery.data ?? null),
+    [companyId, companyQuery.data],
   )
 
   const cities = companyQuery.data?.cities ?? []

@@ -42,12 +42,17 @@ public sealed class CompaniesController(
             Subcategory = request.Subcategory?.Trim(),
             Cities = cities,
             Description = request.Description?.Trim(),
+            DraftPeriodFrom = request.DraftPeriodFrom,
+            DraftPeriodTo = request.DraftPeriodTo,
+            DraftSources = SanitizeSources(request.DraftSources),
         };
 
         db.Companies.Add(company);
         await db.SaveChangesAsync(ct);
 
-        return CreatedAtAction(nameof(Get), new { id = company.Id }, ToDto(company, branchCount: 0));
+        return CreatedAtAction(
+            nameof(Get), new { id = company.Id },
+            ToDto(company, branchCount: 0, logicalBranchCount: 0));
     }
 
     [HttpPut("{id:guid}")]
@@ -76,11 +81,16 @@ public sealed class CompaniesController(
         company.Subcategory = request.Subcategory?.Trim();
         company.Cities = cities;
         company.Description = request.Description?.Trim();
+        company.DraftPeriodFrom = request.DraftPeriodFrom;
+        company.DraftPeriodTo = request.DraftPeriodTo;
+        company.DraftSources = SanitizeSources(request.DraftSources);
         company.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
 
         var branchCount = await db.CompanyBranches.CountAsync(b => b.CompanyId == company.Id, ct);
-        return Ok(ToDto(company, branchCount));
+        var logicalBranchCount = await db.LogicalBranches
+            .CountAsync(lb => lb.CompanyId == company.Id, ct);
+        return Ok(ToDto(company, branchCount, logicalBranchCount));
     }
 
     // Все компании текущего пользователя — нужно для /history (рядом с jobId показывать имя
@@ -97,7 +107,10 @@ public sealed class CompaniesController(
             .OrderByDescending(c => c.UpdatedAt)
             .Select(c => new CompanyDto(
                 c.Id, c.Name, c.Category, c.Subcategory, c.Cities, c.Description,
-                c.Branches.Count, c.CreatedAt, c.UpdatedAt))
+                c.Branches.Count,
+                db.LogicalBranches.Count(lb => lb.CompanyId == c.Id),
+                c.DraftPeriodFrom, c.DraftPeriodTo, c.DraftSources,
+                c.CreatedAt, c.UpdatedAt))
             .ToListAsync(ct);
         return Ok(items);
     }
@@ -117,11 +130,12 @@ public sealed class CompaniesController(
             {
                 Company = c,
                 BranchCount = c.Branches.Count,
+                LogicalBranchCount = db.LogicalBranches.Count(lb => lb.CompanyId == c.Id),
             })
             .SingleOrDefaultAsync(ct);
 
         if (company is null) return NotFound();
-        return Ok(ToDto(company.Company, company.BranchCount));
+        return Ok(ToDto(company.Company, company.BranchCount, company.LogicalBranchCount));
     }
 
     [HttpPost("{id:guid}/search")]
@@ -387,7 +401,22 @@ public sealed class CompaniesController(
         return Guid.TryParse(id, out var g) ? g : null;
     }
 
-    private static CompanyDto ToDto(Company c, int branchCount) => new(
+    // Из присланного списка оставляем только известные slug'и (2gis/yandex/google),
+    // дедупим, сохраняем порядок BranchSources.All. null/пусто → null (чтобы в БД
+    // лежал NULL, а не пустой массив — семантически «юзер ничего не выбрал»).
+    private static List<string>? SanitizeSources(List<string>? sources)
+    {
+        if (sources is null || sources.Count == 0) return null;
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in sources)
+            if (BranchSources.IsKnown(s)) set.Add(s.ToLowerInvariant());
+        if (set.Count == 0) return null;
+        return BranchSources.All.Where(set.Contains).ToList();
+    }
+
+    private static CompanyDto ToDto(Company c, int branchCount, int logicalBranchCount) => new(
         c.Id, c.Name, c.Category, c.Subcategory, c.Cities, c.Description,
-        branchCount, c.CreatedAt, c.UpdatedAt);
+        branchCount, logicalBranchCount,
+        c.DraftPeriodFrom, c.DraftPeriodTo, c.DraftSources,
+        c.CreatedAt, c.UpdatedAt);
 }

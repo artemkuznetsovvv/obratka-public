@@ -7,7 +7,12 @@ public sealed record CreateCompanyRequest(
     [MaxLength(100)] string? Category,
     [MaxLength(100)] string? Subcategory,
     [Required, MinLength(1)] List<string> Cities,
-    [MaxLength(4000)] string? Description);
+    [MaxLength(4000)] string? Description,
+    // Опц. параметры мастера запуска — сохраняются, чтобы юзер мог уйти и
+    // вернуться (cross-session continuity). На step 1 фронт всегда шлёт.
+    DateTimeOffset? DraftPeriodFrom = null,
+    DateTimeOffset? DraftPeriodTo = null,
+    List<string>? DraftSources = null);
 
 public sealed record CompanyDto(
     Guid Id,
@@ -17,6 +22,12 @@ public sealed record CompanyDto(
     IReadOnlyList<string> Cities,
     string? Description,
     int BranchCount,
+    // Сколько физических филиалов (LogicalBranch) у компании — нужен фронту
+    // для детекции «черновика» в /history без отдельного round-trip'а.
+    int LogicalBranchCount,
+    DateTimeOffset? DraftPeriodFrom,
+    DateTimeOffset? DraftPeriodTo,
+    IReadOnlyList<string>? DraftSources,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 

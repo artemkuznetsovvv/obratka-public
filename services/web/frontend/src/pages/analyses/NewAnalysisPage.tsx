@@ -13,7 +13,8 @@ import { PeriodPicker } from './PeriodPicker'
 import {
   DEFAULT_SOURCES,
   defaultWizardState,
-  loadWizardState,
+  effectiveWizardState,
+  periodToDraftPayload,
   saveWizardState,
   type AnalysisPeriod,
 } from './wizardState'
@@ -225,13 +226,11 @@ export default function NewAnalysisPage() {
     setSubcategory(c.subcategory ?? '')
     setCities(c.cities)
     setDescription(c.description ?? '')
-    // When editing an existing company (or returning to step 1 via «Изменить период»),
-    // restore the wizard state from sessionStorage so the user keeps their picks.
-    const wizard = loadWizardState(c.id)
-    if (wizard) {
-      setPeriod(wizard.period)
-      setSources(wizard.sources)
-    }
+    // Возвращение в воронку: sessionStorage (если этой же вкладкой проходили мастер)
+    // → fallback на Company.draft* (если зашли через несколько дней с другого устройства).
+    const wizard = effectiveWizardState(c.id, c)
+    setPeriod(wizard.period)
+    setSources(wizard.sources)
     setPrefilled(true)
   }, [draftQuery.data, prefilled])
 
@@ -284,12 +283,16 @@ export default function NewAnalysisPage() {
     // Sort sources to match BranchSources.All order on the backend — purely cosmetic.
     const normalizedSources = DEFAULT_SOURCES.filter((s) => sources.includes(s))
     setSources(normalizedSources)
+    const { draftPeriodFrom, draftPeriodTo } = periodToDraftPayload(period)
     saveMutation.mutate({
       name: trimmedName,
       category: category || null,
       subcategory: subcategory || null,
       cities,
       description: description.trim() || null,
+      draftPeriodFrom,
+      draftPeriodTo,
+      draftSources: normalizedSources,
     })
   }
 

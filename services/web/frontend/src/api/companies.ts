@@ -8,6 +8,12 @@ export interface CompanyDto {
   cities: string[]
   description: string | null
   branchCount: number
+  // Кол-во физических филиалов (LogicalBranch) — для детекции черновика на /history.
+  logicalBranchCount: number
+  // Сохранённые параметры мастера: позволяют вернуться в воронку через дни/недели.
+  draftPeriodFrom: string | null
+  draftPeriodTo: string | null
+  draftSources: string[] | null
   createdAt: string
   updatedAt: string
 }
@@ -30,6 +36,10 @@ export interface CreateCompanyRequest {
   subcategory?: string | null
   cities: string[]
   description?: string | null
+  // Опц. — фронт всегда шлёт draft с шага 1 мастера; сервер сохранит в Company.Draft*.
+  draftPeriodFrom?: string | null
+  draftPeriodTo?: string | null
+  draftSources?: string[] | null
 }
 
 export interface BranchSearchResultItem {
