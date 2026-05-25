@@ -15,6 +15,8 @@ import { AppLayout } from '@/layouts/AppLayout'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { companiesApi, type LogicalBranchDto } from '@/api/companies'
+import { analysesApi } from '@/api/analyses'
+import { describeApiError } from '@/api/errors'
 import { cn } from '@/lib/utils'
 import { AnalysisStepper } from './AnalysisStepper'
 import {
@@ -34,7 +36,8 @@ const SOURCE_META: Record<string, { label: string; color: string }> = {
 export default function AnalysisSummaryPage() {
   const { companyId } = useParams<{ companyId: string }>()
   const navigate = useNavigate()
-  const [launched, setLaunched] = useState(false)
+  const [launching, setLaunching] = useState(false)
+  const [launchError, setLaunchError] = useState<string | null>(null)
 
   const wizard: WizardState = useMemo(
     () => (companyId ? loadWizardState(companyId) : null) ?? defaultWizardState(),
@@ -71,13 +74,26 @@ export default function AnalysisSummaryPage() {
 
   const reachedFromStep2 = (groupsQuery.data ?? []).length > 0
 
-  const onLaunch = () => {
+  const onLaunch = async () => {
     if (!companyId) return
-    // Real PG launch is wired up in a follow-up. For now: clear wizard state and
-    // park the user on history where running/completed jobs will eventually live.
-    setLaunched(true)
-    clearWizardState(companyId)
-    navigate('/history')
+    setLaunching(true)
+    setLaunchError(null)
+    try {
+      // period.kind === 'range' → ISO yyyy-mm-dd → шлём без time-part, бэк примет как
+      // DateTimeOffset (UTC midnight). Для «с самого начала» оба null — PG поймёт.
+      const periodFrom =
+        wizard.period.kind === 'range' && wizard.period.from ? wizard.period.from : null
+      const periodTo =
+        wizard.period.kind === 'range' && wizard.period.to ? wizard.period.to : null
+
+      const response = await analysesApi.start({ companyId, periodFrom, periodTo })
+      clearWizardState(companyId)
+      navigate(`/history/${response.analysisJobId}`)
+    } catch (err) {
+      setLaunchError(describeApiError(err, 'Не удалось запустить анализ'))
+    } finally {
+      setLaunching(false)
+    }
   }
 
   return (
@@ -263,20 +279,27 @@ export default function AnalysisSummaryPage() {
               </SummaryBlock>
             </div>
 
+            {launchError && (
+              <div className="mt-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                {launchError}
+              </div>
+            )}
+
             <div className="mt-8 flex items-center justify-end gap-3">
               <Button
                 variant="outline"
                 onClick={() => navigate(`/analyses/new/${companyId}/branches`)}
+                disabled={launching}
               >
                 Назад
               </Button>
               <Button
                 onClick={onLaunch}
-                disabled={launched || activeGroups.length === 0}
+                disabled={launching || activeGroups.length === 0}
                 className="gap-2"
               >
                 <Rocket size={18} />
-                {launched ? 'Запускаем…' : 'Запустить анализ'}
+                {launching ? 'Запускаем…' : 'Запустить анализ'}
               </Button>
             </div>
           </>

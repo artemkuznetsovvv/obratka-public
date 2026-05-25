@@ -115,6 +115,8 @@ export interface SaveBranchGroupsRequest {
 }
 
 export const companiesApi = {
+  listMine: () => http.get<CompanyDto[]>('/api/companies').then((r) => r.data),
+
   create: (request: CreateCompanyRequest) =>
     http.post<CompanyDto>('/api/companies', request).then((r) => r.data),
 

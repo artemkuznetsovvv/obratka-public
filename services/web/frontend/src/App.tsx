@@ -13,6 +13,8 @@ import ComingSoonPage from '@/pages/ComingSoonPage'
 import NewAnalysisPage from '@/pages/analyses/NewAnalysisPage'
 import BranchSearchPage from '@/pages/analyses/BranchSearchPage'
 import AnalysisSummaryPage from '@/pages/analyses/AnalysisSummaryPage'
+import HistoryListPage from '@/pages/history/HistoryListPage'
+import HistoryDetailPage from '@/pages/history/HistoryDetailPage'
 
 export default function App() {
   return (
@@ -40,7 +42,15 @@ export default function App() {
         path="/history"
         element={
           <ProtectedRoute>
-            <ComingSoonPage title="История анализов" breadcrumbs={[{ label: 'История анализов' }]} />
+            <HistoryListPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/history/:jobId"
+        element={
+          <ProtectedRoute>
+            <HistoryDetailPage />
           </ProtectedRoute>
         }
       />

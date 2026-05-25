@@ -83,6 +83,25 @@ public sealed class CompaniesController(
         return Ok(ToDto(company, branchCount));
     }
 
+    // Все компании текущего пользователя — нужно для /history (рядом с jobId показывать имя
+     // компании) и для сценариев навигации. Лимита нет — у юзера обычно 1-5 компаний.
+    [HttpGet]
+    [ProducesResponseType(typeof(IReadOnlyList<CompanyDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<CompanyDto>>> ListMine(CancellationToken ct)
+    {
+        var ownerId = GetUserIdOrNull();
+        if (ownerId is null) return Unauthorized();
+
+        var items = await db.Companies.AsNoTracking()
+            .Where(c => c.OwnerUserId == ownerId)
+            .OrderByDescending(c => c.UpdatedAt)
+            .Select(c => new CompanyDto(
+                c.Id, c.Name, c.Category, c.Subcategory, c.Cities, c.Description,
+                c.Branches.Count, c.CreatedAt, c.UpdatedAt))
+            .ToListAsync(ct);
+        return Ok(items);
+    }
+
     [HttpGet("{id:guid}")]
     [ProducesResponseType(typeof(CompanyDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
