@@ -40,6 +40,21 @@ internal sealed class ReviewCountMetricService(ProcessingReadContext db)
     // добавляем сюда.
     private static readonly string[] FixedSources = ["2gis", "yandex", "google"];
 
+    // Полный набор значений sentiment в schema 2.0 (см. ADR-004). Нужен чтобы
+    // отличить «фильтр сужает» от «выбран весь набор = не фильтрую». Иначе
+    // INNER JOIN на review_llm_results исключает отзывы без LLM-результата
+    // (пустые отзывы не идут в LLM → нет записи), и общий count занижается.
+    private static readonly HashSet<string> AllSentiments = new(StringComparer.Ordinal)
+    {
+        "позитивный",
+        "нейтральный",
+        "негативный",
+    };
+
+    // Полный набор звёзд: 1..5. Тот же принцип — если выбраны все 5, фильтр
+    // не активен, иначе stars IS NULL отзывы исключаются.
+    private const int AllStarsCount = 5;
+
     public async Task<ReviewCountMetricResult> ComputeAsync(
         ReviewCountMetricQuery q, CancellationToken ct)
     {
@@ -80,19 +95,24 @@ internal sealed class ReviewCountMetricService(ProcessingReadContext db)
                 (ajr, r) => r)
             .Where(r => branchIds.Contains(r.BranchId));
 
-        if (q.Stars is { Count: > 0 })
+        // Stars: если выбраны все 5 — фильтр не активен (иначе stars IS NULL
+        // отзывы исключаются, занижая total).
+        if (q.Stars is { Count: > 0 } stars && stars.Count < AllStarsCount)
         {
-            var starsList = q.Stars.ToList();
+            var starsList = stars.ToList();
             baseQuery = baseQuery.Where(r => r.Stars != null && starsList.Contains(r.Stars.Value));
         }
 
-        // Если фильтр тональности активен — JOIN на review_llm_results и фильтр
-        // по overall_sentiment. Один отзыв → один результат для конкретного job-а
-        // (LLM может перезаписать при replay, но всегда последний живой).
+        // Sentiments: если активен — JOIN на review_llm_results.
+        // ВАЖНО: трактуем «выбраны все sentiment-значения» как «не фильтрую» и
+        // НЕ делаем JOIN. Пустые отзывы не идут в LLM → нет записи в
+        // review_llm_results → INNER JOIN их потеряет. Юзер, выбравший «все 3»,
+        // ожидает baseline, не отфильтрованный сабсет.
         IQueryable<Review> filtered = baseQuery;
-        if (q.Sentiments is { Count: > 0 })
+        if (q.Sentiments is { Count: > 0 } sent
+            && !(sent.Count == AllSentiments.Count && sent.All(AllSentiments.Contains)))
         {
-            var sentList = q.Sentiments.ToList();
+            var sentList = sent.ToList();
             filtered = baseQuery.Join(
                 db.ReviewLlmResults.Where(llm => llm.AnalysisJobId == q.JobId
                                                   && sentList.Contains(llm.OverallSentiment)),

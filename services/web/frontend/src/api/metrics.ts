@@ -1,4 +1,8 @@
 import { http } from './http'
+import {
+  ALL_SENTIMENTS,
+  ALL_STARS,
+} from '@/pages/dashboards/DashboardFiltersContext'
 
 // Метрика 1: «Количество отзывов». bySource всегда содержит ровно 3 элемента
 // (2gis / yandex / google), даже если по какому-то источнику 0 отзывов.
@@ -22,9 +26,8 @@ export interface ReviewCountQuery {
   // ISO 8601 datetime или null. Бэк принимает DateTimeOffset?.
   from: string | null
   to: string | null
-  // CSV: 'позитивный,нейтральный,негативный'. null/empty = не фильтровать.
+  // null/empty или «все опции» = не фильтровать (см. ниже).
   sentiments: string[]
-  // CSV: '1,2,3'. null/empty = не фильтровать.
   stars: number[]
 }
 
@@ -36,11 +39,23 @@ export const metricsApi = {
           branchIds: q.branchIds.join(','),
           from: q.from ?? undefined,
           to: q.to ?? undefined,
-          // Не передаём параметр вообще, если массив пустой — бэк трактует как «фильтр снят».
-          // Это сделано чтобы пустой select на UI не сворачивал данные в ноль.
-          sentiments: q.sentiments.length > 0 ? q.sentiments.join(',') : undefined,
-          stars: q.stars.length > 0 ? q.stars.join(',') : undefined,
+          // «Все опции» трактуем как «фильтр не применять» — НЕ передаём параметр.
+          // Иначе бэк делает INNER JOIN на review_llm_results (для sentiments) и
+          // исключает отзывы без LLM-результата; для stars — исключает с NULL.
+          // Семантически «выбрано всё» = «не сужаю», должно показывать baseline.
+          sentiments: shouldSendFilter(q.sentiments, ALL_SENTIMENTS.length)
+            ? q.sentiments.join(',')
+            : undefined,
+          stars: shouldSendFilter(q.stars, ALL_STARS.length)
+            ? q.stars.join(',')
+            : undefined,
         },
       })
       .then((r) => r.data),
+}
+
+// Передаём фильтр только если выбран неполный поднабор (1..N-1 опций).
+// Пусто (0) или «все» (N) → не передаём.
+function shouldSendFilter(selected: readonly unknown[], totalOptions: number): boolean {
+  return selected.length > 0 && selected.length < totalOptions
 }
