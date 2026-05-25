@@ -1,0 +1,62 @@
+using Microsoft.EntityFrameworkCore;
+using Obratka.Modules.Analytics.Data.Entities;
+
+namespace Obratka.Modules.Analytics.Data;
+
+// Read-only DbContext к processing_db через PG-пользователя analytics_reader
+// (ADR-011 §«MVP trade-off»). На уровне PG роль имеет SELECT-only права; на
+// уровне кода — этот контекст явно бросает на SaveChanges, чтобы случайный
+// вызов через DI всплыл сразу, а не упал тихо на стороне БД с access denied.
+//
+// Расширяем DbSet'ами по мере появления метрик. Сейчас покрывает только то,
+// что нужно метрике 1 (Review + JOIN на ReviewLlmResult по sentiments
+// + AnalysisJobReview для контекста job-а).
+public sealed class ProcessingReadContext(DbContextOptions<ProcessingReadContext> options)
+    : DbContext(options)
+{
+    public DbSet<Review> Reviews => Set<Review>();
+    public DbSet<ReviewLlmResult> ReviewLlmResults => Set<ReviewLlmResult>();
+    public DbSet<AnalysisJobReview> AnalysisJobReviews => Set<AnalysisJobReview>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Review>(e =>
+        {
+            e.ToTable("reviews", "public");
+            e.HasKey(r => r.Id);
+            e.Property(r => r.Id).HasColumnName("id");
+            e.Property(r => r.CompanyId).HasColumnName("company_id");
+            e.Property(r => r.BranchId).HasColumnName("branch_id");
+            e.Property(r => r.Source).HasColumnName("source");
+            e.Property(r => r.ReviewDate).HasColumnName("review_date");
+            e.Property(r => r.Stars).HasColumnName("stars");
+        });
+
+        modelBuilder.Entity<ReviewLlmResult>(e =>
+        {
+            e.ToTable("review_llm_results", "public");
+            e.HasKey(r => r.Id);
+            e.Property(r => r.Id).HasColumnName("id");
+            e.Property(r => r.ReviewId).HasColumnName("review_id");
+            e.Property(r => r.AnalysisJobId).HasColumnName("analysis_job_id");
+            e.Property(r => r.OverallSentiment).HasColumnName("overall_sentiment");
+            e.Property(r => r.OverallConfidence).HasColumnName("overall_confidence");
+        });
+
+        modelBuilder.Entity<AnalysisJobReview>(e =>
+        {
+            e.ToTable("analysis_job_reviews", "public");
+            e.HasKey(r => new { r.AnalysisJobId, r.ReviewId });
+            e.Property(r => r.AnalysisJobId).HasColumnName("analysis_job_id");
+            e.Property(r => r.ReviewId).HasColumnName("review_id");
+        });
+    }
+
+    public override int SaveChanges()
+        => throw new InvalidOperationException(
+            "ProcessingReadContext is read-only (analytics_reader role has SELECT only).");
+
+    public override Task<int> SaveChangesAsync(CancellationToken ct = default)
+        => throw new InvalidOperationException(
+            "ProcessingReadContext is read-only (analytics_reader role has SELECT only).");
+}

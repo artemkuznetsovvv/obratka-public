@@ -3,6 +3,7 @@ import { Card } from '@/components/ui/card'
 import type { DashboardBranchDto } from '@/api/dashboards'
 import { useDashboardFilters } from '../DashboardFiltersContext'
 import { MetricCardPlaceholder } from './MetricCardPlaceholder'
+import { MetricReviewCount } from '../cards/MetricReviewCount'
 
 // Секция одного филиала. По спеке:
 //   - Базовый слой: метрики 1, 2, 3 (горизонтальный ряд)
@@ -46,7 +47,7 @@ export function BranchSection({ branch }: { branch: DashboardBranchDto }) {
 
       {/* Базовый слой: 1, 2, 3 */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
-        <MetricCardPlaceholder slug="М1" title="Количество отзывов" />
+        <MetricReviewCount branchId={branch.branchId} />
         <MetricCardPlaceholder slug="М2" title="Средний рейтинг" />
         <MetricCardPlaceholder slug="М3" title="Настроение клиентов" />
       </div>

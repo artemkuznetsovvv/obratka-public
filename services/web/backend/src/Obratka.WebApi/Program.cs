@@ -111,7 +111,7 @@ builder.Services.AddScoped<IBranchSearchService, BranchSearchService>();
 builder.Services.AddSingleton<Obratka.WebApi.Companies.Grouping.IBranchGroupingService,
     Obratka.WebApi.Companies.Grouping.BranchGroupingService>();
 
-builder.Services.AddAnalyticsModule();
+builder.Services.AddAnalyticsModule(builder.Configuration);
 builder.Services.AddReportsModule();
 builder.Services.AddNotificationsModule();
 
