@@ -83,6 +83,32 @@ export function setGroupSelected(layout: CityLayout, key: GroupKey, isSelected: 
   }
 }
 
+export function setGroupName(layout: CityLayout, key: GroupKey, name: string): CityLayout {
+  return {
+    ...layout,
+    groups: layout.groups.map((g) => (g.key === key ? { ...g, name } : g)),
+  }
+}
+
+// Отвязать один provider'а от группы → переместить в unmatched, остальные остаются.
+// Если provider был последним в группе — удаляем группу целиком (пустые блоки бэк
+// не примет, см. SaveBranchGroupsRequest валидацию).
+export function detachProvider(layout: CityLayout, key: GroupKey, branchId: string): CityLayout {
+  const group = layout.groups.find((g) => g.key === key)
+  if (!group) return layout
+  const remaining = group.providers.filter((p) => p.branchId !== branchId)
+  if (remaining.length === group.providers.length) return layout // ничего не нашли — no-op
+  const groups =
+    remaining.length === 0
+      ? layout.groups.filter((g) => g.key !== key)
+      : layout.groups.map((g) => (g.key === key ? { ...g, providers: remaining } : g))
+  return {
+    ...layout,
+    groups,
+    unmatchedBranchIds: [...layout.unmatchedBranchIds, branchId],
+  }
+}
+
 export function setProviderEnabled(
   layout: CityLayout,
   key: GroupKey,

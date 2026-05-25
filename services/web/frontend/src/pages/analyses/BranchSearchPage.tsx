@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   ArrowRight,
   CalendarRange,
+  Check,
   ExternalLink,
   Loader2,
   MapPin,
@@ -11,6 +12,7 @@ import {
   Sparkles,
   Star,
   Ungroup,
+  Unlink,
   X,
 } from 'lucide-react'
 import { AppLayout } from '@/layouts/AppLayout'
@@ -37,8 +39,10 @@ import {
   type ClientGroup,
   countActiveProviders,
   createGroupFromUnmatched,
+  detachProvider,
   ignoreUnmatched,
   layoutFromSearchResponse,
+  setGroupName,
   setGroupSelected,
   setProviderEnabled,
   ungroup,
@@ -348,6 +352,10 @@ function CityLayoutView({
               onToggleProvider={(branchId, isEnabled) =>
                 onUpdate((l) => setProviderEnabled(l, g.key, branchId, isEnabled))
               }
+              onDetachProvider={(branchId) =>
+                onUpdate((l) => detachProvider(l, g.key, branchId))
+              }
+              onRename={(name) => onUpdate((l) => setGroupName(l, g.key, name))}
               onUngroup={() => onUpdate((l) => ungroup(l, g.key))}
             />
           ))}
@@ -381,15 +389,25 @@ function LogicalBranchBlock({
   layout,
   onToggleMain,
   onToggleProvider,
+  onDetachProvider,
+  onRename,
   onUngroup,
 }: {
   group: ClientGroup
   layout: CityLayout
   onToggleMain: (v: boolean) => void
   onToggleProvider: (branchId: string, v: boolean) => void
+  onDetachProvider: (branchId: string) => void
+  onRename: (name: string) => void
   onUngroup: () => void
 }) {
   const isCustom = group.key.startsWith('custom-')
+  // Чтобы у юзера была возможность ОТВЯЗАТЬ карточку: action есть всегда, но если в
+  // группе остался ровно один провайдер — он не может «отвязаться» (группа просто
+  // удалится, см. detachProvider). В этом случае UX лучше прятать кнопку вообще,
+  // т.к. для разваливания группы есть «Разгруппировать».
+  const canDetach = group.providers.length > 1
+
   return (
     <Card className={cn('overflow-hidden', !group.isSelected && 'opacity-60')}>
       <div className="flex items-start justify-between gap-3 px-5 py-3 bg-page-bg border-b border-border-subtle">
@@ -400,9 +418,14 @@ function LogicalBranchBlock({
             onChange={(e) => onToggleMain(e.target.checked)}
             className="mt-0.5 h-4 w-4 rounded border-border-subtle text-brand focus:ring-ring"
           />
-          <div className="flex-1 min-w-0">
+          <div
+            className="flex-1 min-w-0"
+            // Клик по самому заголовку не должен переключать чекбокс — у нас тут
+            // inline-edit. Свайпаем bubbling до label-а.
+            onClick={(e) => e.preventDefault()}
+          >
             <div className="flex items-center gap-2 flex-wrap">
-              <div className="text-sm font-semibold text-text-primary truncate">{group.name}</div>
+              <EditableHeading value={group.name} onChange={onRename} />
               {!isCustom && (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
                   <Sparkles size={10} /> Автогруппировка
@@ -488,11 +511,96 @@ function LogicalBranchBlock({
                   Открыть
                 </a>
               )}
+              {canDetach && (
+                <button
+                  type="button"
+                  onClick={() => onDetachProvider(p.branchId)}
+                  className="shrink-0 inline-flex items-center gap-1 text-xs text-text-tertiary hover:text-destructive transition-colors pointer-events-auto"
+                  title="Отвязать карточку из группы (переедет в «Не сгруппировано»)"
+                >
+                  <Unlink size={12} />
+                  Отвязать
+                </button>
+              )}
             </li>
           )
         })}
       </ul>
     </Card>
+  )
+}
+
+// Inline-редактируемый заголовок группы. Дефолт — отображение как текст с иконкой
+// карандаша на hover'е; клик по карандашу/тексту → input на месте; Enter / blur
+// сохраняет, Escape отменяет. Юзер может задать собственное название для физ. филиала
+// (особенно важно когда автоматика дала одинаковые имена из бренда).
+function EditableHeading({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(value)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const start = () => {
+    setDraft(value)
+    setEditing(true)
+    requestAnimationFrame(() => inputRef.current?.select())
+  }
+  const commit = () => {
+    const trimmed = draft.trim()
+    setEditing(false)
+    if (trimmed && trimmed !== value) onChange(trimmed)
+  }
+  const cancel = () => {
+    setEditing(false)
+    setDraft(value)
+  }
+
+  if (editing) {
+    return (
+      <span className="inline-flex items-center gap-1 max-w-full">
+        <input
+          ref={inputRef}
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              commit()
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              cancel()
+            }
+          }}
+          maxLength={500}
+          className="px-2 py-0.5 rounded border border-border-subtle bg-card text-sm font-semibold text-text-primary focus:outline-none focus:ring-2 focus:ring-ring max-w-[320px]"
+        />
+        <button
+          type="button"
+          onClick={commit}
+          // onMouseDown сохраняем чтобы blur input'а не сработал раньше чем onClick
+          onMouseDown={(e) => e.preventDefault()}
+          className="p-1 text-emerald-600 hover:text-emerald-700"
+          title="Сохранить"
+        >
+          <Check size={14} />
+        </button>
+      </span>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={start}
+      className="group inline-flex items-center gap-1.5 text-left max-w-full hover:text-brand transition-colors"
+      title="Переименовать филиал"
+    >
+      <span className="text-sm font-semibold text-text-primary truncate group-hover:text-brand">
+        {value || <span className="italic text-text-tertiary">Без названия</span>}
+      </span>
+      <Pencil size={12} className="text-text-tertiary opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+    </button>
   )
 }
 
@@ -617,7 +725,10 @@ function UnmatchedCardRow({
           <optgroup label="Привязать к филиалу">
             {groups.map((g) => (
               <option key={g.key} value={g.key}>
-                {truncate(g.name, 40)}
+                {truncate(
+                  g.address ? `${g.name} · ${g.address}` : g.name,
+                  60,
+                )}
               </option>
             ))}
           </optgroup>
