@@ -15,9 +15,14 @@ import {
 import { AppLayout } from '@/layouts/AppLayout'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { dashboardsApi, type DashboardHeaderDto } from '@/api/dashboards'
 import { cn } from '@/lib/utils'
 import { SOURCE_LABEL } from '@/pages/history/analysisStatus'
+import { DashboardFiltersProvider, useDashboardFilters } from './DashboardFiltersContext'
+import { DashboardFilters } from './components/DashboardFilters'
+import { BranchSection } from './components/BranchSection'
+import { CommonMetricsLayer } from './components/CommonMetricsLayer'
 
 const SOURCE_BADGE: Record<string, string> = {
   '2gis': 'bg-emerald-100 text-emerald-700',
@@ -25,9 +30,6 @@ const SOURCE_BADGE: Record<string, string> = {
   google: 'bg-blue-100 text-blue-700',
 }
 
-// Phase 0 (зонтичная задача): шапка дашборда + кнопки-заглушки.
-// Фильтры (ТЗ 4.4), слой общих метрик (О1-О3) и секции по филиалам с
-// карточками 1-7 — итерация 2. Сами карточки метрик — итерация 3+.
 export default function DashboardPage() {
   const { jobId } = useParams<{ jobId: string }>()
   const navigate = useNavigate()
@@ -68,10 +70,11 @@ export default function DashboardPage() {
         ) : !dashQuery.data ? (
           <Card className="p-8 text-text-secondary">Анализ не найден</Card>
         ) : (
-          <>
+          <DashboardFiltersProvider header={dashQuery.data}>
             <DashboardHeader data={dashQuery.data} />
-            <UpcomingPlaceholder branchCount={dashQuery.data.branches.length} />
-          </>
+            <DashboardFilters header={dashQuery.data} />
+            <DashboardBody header={dashQuery.data} />
+          </DashboardFiltersProvider>
         )}
       </div>
     </AppLayout>
@@ -79,8 +82,6 @@ export default function DashboardPage() {
 }
 
 // ---- Шапка дашборда ----
-// Слева: название + meta (компания, период, время запуска); справа: действия.
-// Список филиалов — отдельной свёрткой ниже (по ТЗ "свернутый, с раскрытием").
 function DashboardHeader({ data }: { data: DashboardHeaderDto }) {
   const periodLabel = useMemo(() => {
     if (!data.periodFrom || !data.periodTo) return 'С самого начала'
@@ -108,7 +109,6 @@ function DashboardHeader({ data }: { data: DashboardHeaderDto }) {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {/* Заглушки — реализация PDF и live-мониторинга в отдельных задачах */}
           <Button variant="outline" size="sm" disabled className="gap-2" title="Будет в отдельной задаче">
             <Download size={14} />
             Скачать PDF
@@ -120,7 +120,6 @@ function DashboardHeader({ data }: { data: DashboardHeaderDto }) {
         </div>
       </div>
 
-      {/* Sources — цветные бейджи (по тому же стилю, что в HistoryDetailPage) */}
       {data.sources.length > 0 && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <span className="text-xs uppercase tracking-wide text-text-tertiary">Источники:</span>
@@ -195,27 +194,74 @@ function BranchesCollapsible({
   )
 }
 
-// Plaeholder под фильтры + слои метрик. В итерации 2 заменяется на реальный
-// блок фильтров + слой общих метрик (О1-О3, виден при 3+ филиалах) + секции
-// по филиалам с карточками 1-7.
-function UpcomingPlaceholder({ branchCount }: { branchCount: number }) {
-  const layerLabel =
-    branchCount >= 3 ? 'слой общих метрик + табы по филиалам'
-      : branchCount === 2 ? 'две секции рядом'
-      : 'одна секция'
+// ---- Тело дашборда: layout 1/2/3+ + слой общих + секции филиалов ----
+// Решение по итерации 2: layout (видимость слоя общих и табов) определяется
+// branches джоба (статично), фильтр «филиал» влияет только на цифры внутри
+// карточек. См. /loop из истории — это компромисс между букв. чтением спеки
+// («по выбранным филиалам») и стабильным UX.
+function DashboardBody({ header }: { header: DashboardHeaderDto }) {
+  const branches = header.branches
+  const branchCount = branches.length
+
+  if (branchCount === 0) {
+    return (
+      <Card className="p-8 text-center text-text-secondary">
+        В этом анализе не найдено филиалов с собранными отзывами. Возможно,
+        сбор провалился — проверь страницу анализа.
+      </Card>
+    )
+  }
+
+  // 1 филиал: одна секция, без табов и слоя общих
+  if (branchCount === 1) {
+    return <BranchSection branch={branches[0]} />
+  }
+
+  // 2 филиала: табы (по решению из вопроса юзера — единый паттерн с 3+)
+  // 3+ филиалов: табы + слой общих метрик сверху
   return (
-    <Card className="p-8 text-center">
-      <div className="text-text-secondary text-sm mb-2">
-        Здесь появятся фильтры и карточки метрик.
-      </div>
-      <div className="text-text-tertiary text-xs">
-        Раскладка под текущий выбор ({branchCount}{' '}
-        {pluralize(branchCount, ['филиал', 'филиала', 'филиалов'])}): {layerLabel}.
-      </div>
-    </Card>
+    <>
+      {branchCount >= 3 && <CommonMetricsLayer />}
+      <BranchTabs branches={branches} />
+    </>
   )
 }
 
+function BranchTabs({ branches }: { branches: DashboardHeaderDto['branches'] }) {
+  const filters = useDashboardFilters()
+  const selectedSet = new Set(filters.branches)
+  return (
+    <Tabs defaultValue={branches[0].branchId} className="w-full">
+      <TabsList className="h-auto flex-wrap p-1 mb-2 max-w-full">
+        {branches.map((b) => {
+          const isExcluded = !selectedSet.has(b.branchId)
+          return (
+            <TabsTrigger
+              key={b.branchId}
+              value={b.branchId}
+              className={cn(
+                'whitespace-nowrap max-w-[14rem]',
+                isExcluded && 'opacity-50',
+              )}
+              title={isExcluded ? 'Филиал исключён фильтром «Филиал»' : undefined}
+            >
+              <span className="truncate">
+                {b.name ?? 'Удалён'}
+              </span>
+            </TabsTrigger>
+          )
+        })}
+      </TabsList>
+      {branches.map((b) => (
+        <TabsContent key={b.branchId} value={b.branchId} className="mt-4">
+          <BranchSection branch={b} />
+        </TabsContent>
+      ))}
+    </Tabs>
+  )
+}
+
+// ---- helpers ----
 function formatDateTime(iso: string): string {
   try {
     const d = new Date(iso)
