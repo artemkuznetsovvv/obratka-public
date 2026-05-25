@@ -88,3 +88,100 @@ PG принимает `dateFrom` / `dateTo` в `StartAnalysisCommand` (см. ADR
   они видны на детальной странице
 - Старые анализы без сохранённого периода (до миграции) показывают «—» или
   «С самого начала» (на выбор — null допустим)
+
+---
+
+## 2. Snapshot выбранных филиалов на старте job-а
+
+**Откуда запрос:** Web API → HistoryDetailPage (collapsible «Параметры анализа»).
+**Приоритет:** средний — связан с пунктом 1 (та же проблема перегруппировки).
+**Дата:** 2026-05-26.
+
+### Контекст
+
+На детальной странице анализа есть раскрывающийся блок «Параметры анализа» —
+показывает выбранные физические филиалы и провайдеры. Сейчас Web API читает
+**текущее** состояние группировки из `webapi_db.LogicalBranches` (через
+`companiesApi.listGroups`). Если юзер успел перегруппировать после запуска
+анализа — на детальной увидит новую группировку, а не ту, с которой реально
+гонялся анализ.
+
+Аналогично с per-branch counts (`/api/analyses/{jobId}/branch-stats`):
+`branch_id` в `reviews` — физический (LogicalBranch.Id), это работает корректно
+**пока** юзер не удалил/перегруппировал LogicalBranch. После — мы видим
+`reviews.branch_id` для уже несуществующего id, и Web API в JOIN с
+`LogicalBranches` отдаёт `branchName = null` (фронт показывает
+«Филиал удалён»).
+
+### Что нужно поменять
+
+Snapshot полной конфигурации запуска на момент создания job-а:
+
+1. EF миграция: новая таблица `analysis_job_branches`
+   ```sql
+   CREATE TABLE analysis_job_branches (
+       analysis_job_id    UUID NOT NULL REFERENCES analysis_jobs(id) ON DELETE CASCADE,
+       logical_branch_id  UUID NOT NULL,          -- физический филиал, как пришёл в команде
+       logical_branch_name        TEXT NOT NULL,  -- snapshot имени (для отображения если LogicalBranch удалят)
+       logical_branch_address     TEXT,
+       PRIMARY KEY (analysis_job_id, logical_branch_id)
+   );
+
+   CREATE TABLE analysis_job_branch_providers (
+       analysis_job_id    UUID NOT NULL,
+       logical_branch_id  UUID NOT NULL,
+       source             VARCHAR(50) NOT NULL,
+       external_id        VARCHAR(500) NOT NULL,
+       external_url       TEXT NOT NULL,
+       PRIMARY KEY (analysis_job_id, logical_branch_id, source, external_id),
+       FOREIGN KEY (analysis_job_id, logical_branch_id)
+           REFERENCES analysis_job_branches(analysis_job_id, logical_branch_id) ON DELETE CASCADE
+   );
+   ```
+
+2. `Application/Messaging/Contracts/MessagingContracts.cs`: расширить
+   `StartAnalysisCommand.Branches` — каждый `BranchSpec` уже содержит `BranchId`
+   (= LogicalBranchId), `Source`, `ExternalId`, `ExternalUrl`. Добавить
+   опц. `LogicalBranchName`, `LogicalBranchAddress` для snapshot'а.
+
+3. `Application/Consumers/StartAnalysisCommandConsumer.cs`: при `INSERT analysis_jobs`
+   параллельно INSERT-ить в `analysis_job_branches` и
+   `analysis_job_branch_providers`.
+
+4. Новый QA-endpoint `GET /api/qa/analyses/{jobId}/branches` который отдаёт
+   снэпшот:
+   ```json
+   {
+     "branches": [
+       {
+         "logical_branch_id": "...",
+         "name": "...",
+         "address": "...",
+         "providers": [
+           { "source": "2gis", "external_id": "...", "external_url": "..." }
+         ]
+       }
+     ]
+   }
+   ```
+
+**В Web API:**
+
+5. `IProcessingGatewayClient.GetJobBranchesAsync(jobId, ct)` → новый метод.
+
+6. `AnalysesController.GetJobBranches(jobId)` → читает snapshot из PG (вместо
+   `companiesApi.listGroups` из текущей Company).
+
+7. `HistoryDetailPage.AnalysisParamsCard` переключается на новый endpoint.
+
+8. `BranchStatsBlock` — JOIN с `analysis_job_branches.logical_branch_name` вместо
+   `webapi_db.LogicalBranches`, чтобы имена не «терялись» при удалении.
+
+### Acceptance criteria
+
+- Запустил анализ → переименовал/удалил филиал в мастере → открыл старый анализ
+  → видны исходные имена/адреса/провайдеры (с момента запуска)
+- Live-monitoring: каждый цикл сохраняет тот же snapshot конфигурации → история
+  изменений мониторинга видна
+- Старые job'ы без snapshot (до миграции) — фронт fallback'ится на текущую
+  Company (как сейчас) с пометкой «параметры могли измениться»

@@ -197,6 +197,29 @@ public sealed class QaAnalysesController : ControllerBase
         return Ok(new { total, limit = take, offset = skip, items });
     }
 
+    /// Агрегаты по (branch_id, source) для собранных в этом job отзывов.
+    /// Используется Web API для рендера «Сколько собрано по конкретному филиалу и источнику»
+    /// на странице деталей анализа. branch_id здесь — физический (LogicalBranch.Id),
+    /// потому что Web API при запуске прокидывает именно его в StartAnalysisBranchSpec.
+    [HttpGet("{jobId:guid}/branch-stats")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetBranchStats(Guid jobId, CancellationToken ct)
+    {
+        var items = await _db.AnalysisJobReviews.AsNoTracking()
+            .Where(l => l.AnalysisJobId == jobId)
+            .Join(_db.Reviews, l => l.ReviewId, r => r.Id, (_, r) => r)
+            .GroupBy(r => new { r.BranchId, r.Source })
+            .Select(g => new
+            {
+                branch_id = g.Key.BranchId,
+                source = g.Key.Source,
+                review_count = g.Count(),
+            })
+            .OrderBy(x => x.branch_id).ThenBy(x => x.source)
+            .ToListAsync(ct);
+        return Ok(new { items });
+    }
+
     /// Принудительно пометить job как failed (для отладки залипших состояний).
     [HttpPost("{jobId:guid}/cancel")]
     public async Task<IActionResult> Cancel(Guid jobId, [FromQuery] string? reason, CancellationToken ct)
