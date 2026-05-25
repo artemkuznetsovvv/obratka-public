@@ -5,16 +5,26 @@ import {
   ArrowRight,
   CalendarRange,
   Check,
+  ChevronDown,
   ExternalLink,
   Loader2,
   MapPin,
   Pencil,
+  Plus,
   Sparkles,
   Star,
   Ungroup,
   Unlink,
   X,
 } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { AppLayout } from '@/layouts/AppLayout'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -665,15 +675,6 @@ function UnmatchedCardRow({
 }) {
   const meta =
     SOURCE_META[card.source] ?? { label: card.source, color: 'bg-page-bg text-text-secondary' }
-  const onSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const v = e.target.value
-    if (!v) return
-    if (v === '__create__') onCreate()
-    else if (v === '__ignore__') onIgnore()
-    else onAttach(v)
-    // Reset to placeholder — иначе при следующем рендере select висит на выбранном option.
-    e.target.value = ''
-  }
 
   return (
     <li className="flex items-center gap-3 px-5 py-3">
@@ -713,30 +714,71 @@ function UnmatchedCardRow({
           Открыть
         </a>
       )}
-      <select
-        value=""
-        onChange={onSelect}
-        className="h-9 px-2 rounded-md border border-border-subtle bg-card text-xs text-text-primary focus:outline-none focus:ring-2 focus:ring-ring max-w-[220px]"
-      >
-        <option value="" disabled>
-          Действие…
-        </option>
-        {groups.length > 0 && (
-          <optgroup label="Привязать к филиалу">
-            {groups.map((g) => (
-              <option key={g.key} value={g.key}>
-                {truncate(
-                  g.address ? `${g.name} · ${g.address}` : g.name,
-                  60,
-                )}
-              </option>
-            ))}
-          </optgroup>
-        )}
-        <option value="__create__">Создать новый филиал</option>
-        <option value="__ignore__">Игнорировать</option>
-      </select>
+      <UnmatchedActionsMenu
+        groups={groups}
+        onAttach={onAttach}
+        onCreate={onCreate}
+        onIgnore={onIgnore}
+      />
     </li>
+  )
+}
+
+function UnmatchedActionsMenu({
+  groups,
+  onAttach,
+  onCreate,
+  onIgnore,
+}: {
+  groups: ClientGroup[]
+  onAttach: (key: string) => void
+  onCreate: () => void
+  onIgnore: () => void
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        className={cn(
+          'inline-flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-medium',
+          'bg-card border border-border-subtle text-text-primary',
+          'hover:border-brand/40 hover:bg-state-active-bg/40 hover:text-brand',
+          'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+          'data-[state=open]:border-brand/40 data-[state=open]:bg-state-active-bg/40 data-[state=open]:text-brand',
+          'transition-colors',
+        )}
+      >
+        Действие
+        <ChevronDown size={14} className="opacity-70" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72">
+        {groups.length > 0 && (
+          <>
+            <DropdownMenuLabel>Привязать к филиалу</DropdownMenuLabel>
+            {groups.map((g) => (
+              <DropdownMenuItem
+                key={g.key}
+                onSelect={() => onAttach(g.key)}
+                className="flex flex-col items-start gap-0.5"
+              >
+                <span className="text-sm font-medium truncate w-full">{g.name || 'Без названия'}</span>
+                {g.address && (
+                  <span className="text-xs text-text-tertiary truncate w-full">{g.address}</span>
+                )}
+              </DropdownMenuItem>
+            ))}
+            <DropdownMenuSeparator />
+          </>
+        )}
+        <DropdownMenuItem onSelect={onCreate} className="gap-2">
+          <Plus size={14} className="text-text-tertiary" />
+          <span>Создать новый филиал</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onIgnore} destructive className="gap-2">
+          <X size={14} />
+          <span>Игнорировать</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -790,9 +832,4 @@ function IgnoredSection({
       </Card>
     </div>
   )
-}
-
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s
-  return s.slice(0, max - 1) + '…'
 }
