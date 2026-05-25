@@ -1,12 +1,12 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowDown, ArrowRight, ArrowUp, AlertCircle } from 'lucide-react'
 import { useParams } from 'react-router-dom'
 import { Card } from '@/components/ui/card'
 import { metricsApi, type ReviewCountMetricDto } from '@/api/metrics'
 import { cn } from '@/lib/utils'
 import { SOURCE_LABEL } from '@/pages/history/analysisStatus'
 import { useDashboardFilters } from '../DashboardFiltersContext'
+import { MetricErrorCard, MetricSkeletonCard, TrendLine } from './shared/CardParts'
 
 const SOURCE_BADGE: Record<string, string> = {
   '2gis': 'bg-emerald-100 text-emerald-700',
@@ -46,7 +46,7 @@ export function MetricReviewCount({ branchId }: { branchId: string }) {
     ],
     queryFn: () =>
       metricsApi.reviewCount(jobId!, {
-        branchId,
+        branchIds: [branchId],
         from: filters.periodFrom,
         to: filters.periodTo,
         sentiments: filters.sentiments,
@@ -57,13 +57,13 @@ export function MetricReviewCount({ branchId }: { branchId: string }) {
   })
 
   if (q.isLoading) {
-    return <SkeletonCard />
+    return <MetricSkeletonCard />
   }
   if (q.isError) {
-    return <ErrorCard message={(q.error as Error).message} />
+    return <MetricErrorCard message={(q.error as Error).message} />
   }
   if (!q.data) {
-    return <SkeletonCard />
+    return <MetricSkeletonCard />
   }
   return (
     <ReviewCountView
@@ -177,85 +177,5 @@ function ReviewCountView({
   )
 }
 
-// Стрелка + абсолютная разница к предыдущему периоду такой же длительности.
-// Цвета: рост = зелёный, падение = красный, без изменений = серый.
-// «—» когда нет данных за предыдущий период (или строка источника снята).
-//
-// Граничный случай «обе нули»: если current=0 и previous=0, диапазон не
-// информативен (нет данных в обоих периодах). Спека просит прочерк в таких
-// случаях — даём «—» (это покрывает и «нет данных за prev», и «реальный 0=0»).
-function TrendLine({
-  current,
-  previous,
-  hasPrev,
-  size,
-}: {
-  current: number
-  previous: number
-  hasPrev: boolean
-  size: 'sm' | 'lg'
-}) {
-  if (!hasPrev || (current === 0 && previous === 0)) {
-    return (
-      <span
-        className={cn(
-          'inline-flex items-center text-text-tertiary',
-          size === 'lg' ? 'text-sm' : 'text-xs',
-        )}
-        title={hasPrev ? 'Нет отзывов ни за выбранный, ни за предыдущий период' : 'Период не выбран — тренд недоступен'}
-      >
-        —
-      </span>
-    )
-  }
-
-  const diff = current - previous
-  const Icon = diff > 0 ? ArrowUp : diff < 0 ? ArrowDown : ArrowRight
-  const color =
-    diff > 0
-      ? 'text-emerald-600'
-      : diff < 0
-      ? 'text-rose-600'
-      : 'text-text-tertiary'
-
-  const absDiff = Math.abs(diff).toLocaleString('ru-RU')
-  const sign = diff > 0 ? '+' : diff < 0 ? '−' : ''
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-0.5 tabular-nums',
-        color,
-        size === 'lg' ? 'text-sm font-medium' : 'text-xs',
-      )}
-      title={`предыдущий период: ${previous.toLocaleString('ru-RU')}`}
-    >
-      <Icon size={size === 'lg' ? 14 : 12} strokeWidth={2.5} />
-      {sign}
-      {absDiff}
-    </span>
-  )
-}
-
-function SkeletonCard() {
-  return (
-    <Card className="p-5 min-h-[14rem] flex items-center justify-center text-xs text-text-tertiary">
-      Загружаем…
-    </Card>
-  )
-}
-
-function ErrorCard({ message }: { message: string }) {
-  return (
-    <Card className="p-5 border-rose-200 bg-rose-50">
-      <div className="flex items-start gap-2 text-sm">
-        <AlertCircle size={16} className="text-rose-700 shrink-0 mt-0.5" />
-        <div className="min-w-0">
-          <div className="font-semibold text-rose-900 mb-0.5">
-            Не удалось посчитать метрику
-          </div>
-          <div className="text-rose-800 text-xs break-words">{message}</div>
-        </div>
-      </div>
-    </Card>
-  )
-}
+// (TrendLine / SkeletonCard / ErrorCard вынесены в shared/CardParts —
+//  переиспользуются метрикой О1 «Всего по сети».)

@@ -1,8 +1,9 @@
 import { Building2 } from 'lucide-react'
 import { MetricCardPlaceholder } from './MetricCardPlaceholder'
+import { MetricNetworkTotalReviews } from '../cards/MetricNetworkTotalReviews'
 
 // Слой общих метрик по сети — отображается только когда в джобе 3+ филиалов.
-// Содержит О1/О2/О3 в горизонтальном ряду (плейсхолдеры на момент итерации 2).
+// Содержит О1/О2/О3 в горизонтальном ряду.
 export function CommonMetricsLayer() {
   return (
     <div className="mb-6">
@@ -11,7 +12,7 @@ export function CommonMetricsLayer() {
         По сети
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <MetricCardPlaceholder slug="О1" title="Всего отзывов по сети" />
+        <MetricNetworkTotalReviews />
         <MetricCardPlaceholder slug="О2" title="Средний рейтинг по сети" />
         <MetricCardPlaceholder slug="О3" title="Настроение по сети" />
       </div>

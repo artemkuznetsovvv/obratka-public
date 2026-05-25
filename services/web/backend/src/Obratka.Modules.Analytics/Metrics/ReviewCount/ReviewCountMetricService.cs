@@ -10,14 +10,15 @@ public interface IReviewCountMetricService
         ReviewCountMetricQuery query, CancellationToken ct);
 }
 
-// Параметры запроса метрики 1. Все коллекции — фильтры; null или пустой
-// массив трактуем как «фильтр не применять» (например, sentiments=null →
-// учитываем все тональности, sentiments=[] → тоже все, ибо снять весь
-// фильтр = «ничего не выбрано» = empty result от UI; на бэке трактуем
-// одинаково — иначе пустой фильтр сразу даст ноль везде, что бесполезно).
+// Параметры запроса метрики 1 / О1.
+// BranchIds — обязательный непустой набор: для М1 (per-branch) приходит один id,
+// для О1 (по сети) — все выбранные в фильтре. Пустой список = 400 на endpoint.
+//
+// Sentiments / Stars: null или пустой массив = «фильтр не применять» (все значения).
+// Это сделано чтобы пустой select на UI не сворачивал данные в ноль — UX так понятнее.
 public sealed record ReviewCountMetricQuery(
     Guid JobId,
-    Guid BranchId,
+    IReadOnlyCollection<Guid> BranchIds,
     DateTimeOffset? From,
     DateTimeOffset? To,
     IReadOnlyCollection<string>? Sentiments,
@@ -63,10 +64,12 @@ internal sealed class ReviewCountMetricService(ProcessingReadContext db)
             prevFromInclusive = q.From.Value - duration;
         }
 
-        // Базовый набор: reviews джоба × выбранный branch.
+        // Базовый набор: reviews джоба × выбранные branches.
         // JOIN на analysis_job_reviews даёт jobId-скоупинг (reviews шарятся между
-        // job'ами одной компании). JOIN на review_llm_results нужен ТОЛЬКО когда
-        // фильтр sentiments активен (иначе INNER JOIN бы исключал отзывы без LLM-результата).
+        // job'ами одной компании). Contains() → SQL IN(...). JOIN на
+        // review_llm_results нужен ТОЛЬКО когда фильтр sentiments активен
+        // (иначе INNER JOIN бы исключал отзывы без LLM-результата).
+        var branchIds = q.BranchIds.ToList();
         var baseQuery = db.AnalysisJobReviews
             .AsNoTracking()
             .Where(ajr => ajr.AnalysisJobId == q.JobId)
@@ -75,7 +78,7 @@ internal sealed class ReviewCountMetricService(ProcessingReadContext db)
                 ajr => ajr.ReviewId,
                 r => r.Id,
                 (ajr, r) => r)
-            .Where(r => r.BranchId == q.BranchId);
+            .Where(r => branchIds.Contains(r.BranchId));
 
         if (q.Stars is { Count: > 0 })
         {

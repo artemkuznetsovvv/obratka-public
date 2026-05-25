@@ -19,20 +19,24 @@ public sealed class DashboardMetricsController(
     UserManager<ApplicationUser> userManager,
     IReviewCountMetricService? reviewCountService = null) : ControllerBase
 {
-    // Метрика 1: «Количество отзывов». Phase 3 итерации дашборда.
+    // Метрика 1 «Количество отзывов» (per-branch) и О1 «Всего отзывов по сети»
+    // (мульти-branch) — оба используют этот endpoint. Разница только в branchIds:
+    //   М1 → ?branchIds=<один-guid>
+    //   О1 → ?branchIds=<guid>,<guid>,...
     // Параметры:
-    //  - branchId: обязательный, карточка живёт в секции филиала.
+    //  - branchIds: обязательный непустой CSV из guid'ов.
     //  - from / to: фильтр периода. Если хоть один null — тренд считается false.
     //  - sentiments / stars: 0..N значений (CSV). Пусто = «фильтр не применять».
     // sources в карточке не фильтрует строки (всегда 3 источника), но влияет на
     // total — на этом этапе фронт суммирует сам, бэкенд просто отдаёт per-source.
     [HttpGet("review-count")]
     [ProducesResponseType(typeof(ReviewCountMetricDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<ActionResult<ReviewCountMetricDto>> ReviewCount(
         Guid jobId,
-        [FromQuery] Guid branchId,
+        [FromQuery] string? branchIds,
         [FromQuery] DateTimeOffset? from,
         [FromQuery] DateTimeOffset? to,
         [FromQuery] string? sentiments,
@@ -47,8 +51,9 @@ public sealed class DashboardMetricsController(
                 detail: "ConnectionStrings:ProcessingReadDb пустой — Analytics-модуль не подключён к processing_db. Задай connection string и перезапусти Web API.");
         }
 
-        if (branchId == Guid.Empty)
-            return BadRequest(new { error = "branchId is required" });
+        var branchList = ParseGuids(branchIds);
+        if (branchList is null || branchList.Count == 0)
+            return BadRequest(new { error = "branchIds is required (CSV of guids, at least one)" });
 
         // Ownership check: тот же паттерн, что в AnalysesController — не палим
         // существование чужого джоба.
@@ -67,7 +72,7 @@ public sealed class DashboardMetricsController(
         var result = await reviewCountService.ComputeAsync(
             new ReviewCountMetricQuery(
                 JobId: jobId,
-                BranchId: branchId,
+                BranchIds: branchList,
                 From: from,
                 To: to,
                 Sentiments: sentimentList,
@@ -82,6 +87,18 @@ public sealed class DashboardMetricsController(
                 .Select(kv => new ReviewCountSourceDto(kv.Key, kv.Value.Current, kv.Value.Previous))
                 .ToList());
         return Ok(dto);
+    }
+
+    private static IReadOnlyCollection<Guid>? ParseGuids(string? csv)
+    {
+        if (string.IsNullOrWhiteSpace(csv)) return null;
+        var items = csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var list = new List<Guid>(items.Length);
+        foreach (var s in items)
+        {
+            if (Guid.TryParse(s, out var g)) list.Add(g);
+        }
+        return list.Count == 0 ? null : list;
     }
 
     private static IReadOnlyCollection<string>? ParseCsv(string? csv)

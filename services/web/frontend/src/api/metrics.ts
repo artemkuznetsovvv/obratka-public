@@ -17,7 +17,8 @@ export interface ReviewCountMetricDto {
 }
 
 export interface ReviewCountQuery {
-  branchId: string
+  // Непустой массив branchIds. М1 (per-branch) → 1 элемент, О1 (по сети) → N.
+  branchIds: string[]
   // ISO 8601 datetime или null. Бэк принимает DateTimeOffset?.
   from: string | null
   to: string | null
@@ -32,7 +33,7 @@ export const metricsApi = {
     http
       .get<ReviewCountMetricDto>(`/api/analyses/${jobId}/metrics/review-count`, {
         params: {
-          branchId: q.branchId,
+          branchIds: q.branchIds.join(','),
           from: q.from ?? undefined,
           to: q.to ?? undefined,
           // Не передаём параметр вообще, если массив пустой — бэк трактует как «фильтр снят».
