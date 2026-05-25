@@ -9,6 +9,10 @@ Service → сохраняет сырые отзывы в `processing_db` → п
 > - ADR-001 (Parser ↔ PG), ADR-002 (схема `processing_db`), ADR-004 (LLM-транспорт), ADR-008 (логи), ADR-011 (декомпозиция, отдельные БД).
 > - `../Parser-Service/CLAUDE.md` + `../Parser-Service/docs/flow-parser.md` — контракт Parser, который PG **обязан** соблюдать.
 
+> **Запросы на улучшения из соседних сервисов** (Web API, UI) —
+> в [`processing-gateway-todo.md`](processing-gateway-todo.md) в корне репы.
+> Прежде чем планировать работу — проверь, нет ли уже описанного запроса там.
+
 При расхождении между этим файлом и ADR — побеждает ADR.
 
 ---
