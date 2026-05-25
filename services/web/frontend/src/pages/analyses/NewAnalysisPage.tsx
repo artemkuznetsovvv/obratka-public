@@ -9,6 +9,20 @@ import { Card } from '@/components/ui/card'
 import { CityAutocomplete } from '@/components/ui/city-autocomplete'
 import { companiesApi, type CreateCompanyRequest } from '@/api/companies'
 import { AnalysisStepper } from './AnalysisStepper'
+import { PeriodPicker } from './PeriodPicker'
+import {
+  DEFAULT_SOURCES,
+  defaultWizardState,
+  loadWizardState,
+  saveWizardState,
+  type AnalysisPeriod,
+} from './wizardState'
+
+const SOURCE_OPTIONS: Array<{ value: string; label: string; hint: string }> = [
+  { value: '2gis', label: '2ГИС', hint: 'Города России и СНГ, B2B-каталог' },
+  { value: 'yandex', label: 'Яндекс.Карты', hint: 'Россия, СНГ, частично Европа' },
+  { value: 'google', label: 'Google Maps', hint: 'Глобально, часто меньше отзывов в РФ' },
+]
 
 const OTHER = 'Другое'
 
@@ -190,6 +204,8 @@ export default function NewAnalysisPage() {
   const [subcategory, setSubcategory] = useState('')
   const [cities, setCities] = useState<string[]>([])
   const [description, setDescription] = useState('')
+  const [period, setPeriod] = useState<AnalysisPeriod>(() => defaultWizardState().period)
+  const [sources, setSources] = useState<string[]>(() => defaultWizardState().sources)
   const [error, setError] = useState<string | null>(null)
   const [prefilled, setPrefilled] = useState(false)
 
@@ -209,6 +225,13 @@ export default function NewAnalysisPage() {
     setSubcategory(c.subcategory ?? '')
     setCities(c.cities)
     setDescription(c.description ?? '')
+    // When editing an existing company (or returning to step 1 via «Изменить период»),
+    // restore the wizard state from sessionStorage so the user keeps their picks.
+    const wizard = loadWizardState(c.id)
+    if (wizard) {
+      setPeriod(wizard.period)
+      setSources(wizard.sources)
+    }
     setPrefilled(true)
   }, [draftQuery.data, prefilled])
 
@@ -216,6 +239,8 @@ export default function NewAnalysisPage() {
     mutationFn: (req: CreateCompanyRequest) =>
       fromId ? companiesApi.update(fromId, req) : companiesApi.create(req),
     onSuccess: (company) => {
+      // Persist period + sources keyed by companyId — step 2/3 will read this.
+      saveWizardState(company.id, { period, sources })
       navigate(`/analyses/new/${company.id}/branches`)
     },
     onError: (err: unknown) => {
@@ -223,6 +248,12 @@ export default function NewAnalysisPage() {
       setError(msg)
     },
   })
+
+  const toggleSource = (value: string) => {
+    setSources((prev) =>
+      prev.includes(value) ? prev.filter((s) => s !== value) : [...prev, value],
+    )
+  }
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault()
@@ -236,6 +267,23 @@ export default function NewAnalysisPage() {
       setError('Добавьте хотя бы один город')
       return
     }
+    if (sources.length === 0) {
+      setError('Выберите хотя бы один источник')
+      return
+    }
+    if (period.kind === 'range') {
+      if (!period.from || !period.to) {
+        setError('Заполните обе даты периода или выберите «С самого начала»')
+        return
+      }
+      if (period.from > period.to) {
+        setError('Дата «от» не может быть позже даты «до»')
+        return
+      }
+    }
+    // Sort sources to match BranchSources.All order on the backend — purely cosmetic.
+    const normalizedSources = DEFAULT_SOURCES.filter((s) => sources.includes(s))
+    setSources(normalizedSources)
     saveMutation.mutate({
       name: trimmedName,
       category: category || null,
@@ -347,6 +395,49 @@ export default function NewAnalysisPage() {
               </div>
 
               <div className="md:col-span-2">
+                <label className="block text-h3 text-text-primary mb-2">Период анализа</label>
+                <p className="mb-3 text-xs text-text-tertiary">
+                  За какой отрезок времени смотреть отзывы. Базовый параметр — от него зависит
+                  объём данных и время сбора.
+                </p>
+                <PeriodPicker value={period} onChange={setPeriod} />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="block text-h3 text-text-primary mb-2">Источники отзывов</label>
+                <p className="mb-3 text-xs text-text-tertiary">
+                  Выберите карты, где у вашего бизнеса есть отзывы. Для каждого источника на
+                  следующем шаге появится список найденных карточек.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {SOURCE_OPTIONS.map((opt) => {
+                    const checked = sources.includes(opt.value)
+                    return (
+                      <label
+                        key={opt.value}
+                        className={`flex items-start gap-3 p-4 rounded-xl border cursor-pointer transition-colors ${
+                          checked
+                            ? 'border-brand/40 bg-state-active-bg/60'
+                            : 'border-border-subtle hover:border-brand/30'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleSource(opt.value)}
+                          className="mt-0.5 h-4 w-4 rounded border-border-subtle text-brand focus:ring-ring"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-text-primary">{opt.label}</div>
+                          <div className="text-xs text-text-tertiary mt-0.5">{opt.hint}</div>
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="md:col-span-2">
                 <label className="block text-h3 text-text-primary mb-2">Дополнительный контекст</label>
                 <textarea
                   className="w-full p-4 rounded-lg border border-border-subtle bg-card text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 resize-y"
@@ -377,9 +468,7 @@ export default function NewAnalysisPage() {
                   ? fromId
                     ? 'Сохраняем…'
                     : 'Создаём…'
-                  : fromId
-                    ? 'Продолжить поиск'
-                    : 'Найти компанию'}
+                  : 'Найти филиалы'}
                 {!saveMutation.isPending && <ArrowRight size={18} />}
               </Button>
             </div>

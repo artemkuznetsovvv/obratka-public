@@ -12,6 +12,7 @@ import CompaniesPage from '@/pages/admin/CompaniesPage'
 import ComingSoonPage from '@/pages/ComingSoonPage'
 import NewAnalysisPage from '@/pages/analyses/NewAnalysisPage'
 import BranchSearchPage from '@/pages/analyses/BranchSearchPage'
+import AnalysisSummaryPage from '@/pages/analyses/AnalysisSummaryPage'
 
 export default function App() {
   return (
@@ -57,6 +58,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <BranchSearchPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/analyses/new/:companyId/summary"
+        element={
+          <ProtectedRoute>
+            <AnalysisSummaryPage />
           </ProtectedRoute>
         }
       />

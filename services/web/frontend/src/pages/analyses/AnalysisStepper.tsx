@@ -4,8 +4,8 @@ import { cn } from '@/lib/utils'
 export type AnalysisStep = 1 | 2 | 3
 
 const steps = [
-  { id: 1, label: 'Шаг 1: О компании' },
-  { id: 2, label: 'Шаг 2: Выбор источников' },
+  { id: 1, label: 'Шаг 1: Параметры' },
+  { id: 2, label: 'Шаг 2: Филиалы' },
   { id: 3, label: 'Шаг 3: Запуск' },
 ] as const
 

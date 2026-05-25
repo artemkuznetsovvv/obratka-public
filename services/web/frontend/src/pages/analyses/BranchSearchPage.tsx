@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, Loader2, MapPin, Star } from 'lucide-react'
+import { ArrowRight, CalendarRange, Loader2, MapPin, Pencil, Star } from 'lucide-react'
 import { AppLayout } from '@/layouts/AppLayout'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -13,6 +13,14 @@ import {
 import { describeApiError } from '@/api/errors'
 import { cn } from '@/lib/utils'
 import { AnalysisStepper } from './AnalysisStepper'
+import {
+  defaultWizardState,
+  formatPeriodSummary,
+  formatSourcesSummary,
+  loadWizardState,
+  saveWizardState,
+  type WizardState,
+} from './wizardState'
 
 type CityState =
   | { status: 'pending' }
@@ -43,6 +51,13 @@ export default function BranchSearchPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  // Wizard state lives in sessionStorage keyed by companyId. If the user lands
+  // here directly (deeplink) without going through step 1, fall back to defaults
+  // so the page still works — they'll be able to «Изменить период» to pick.
+  const wizard: WizardState = useMemo(
+    () => (companyId ? loadWizardState(companyId) : null) ?? defaultWizardState(),
+    [companyId],
+  )
 
   const cities = companyQuery.data?.cities ?? []
   const allDone = cities.length > 0 && cities.every((c) => cityStates[c]?.status === 'done')
@@ -57,6 +72,11 @@ export default function BranchSearchPage() {
 
   useEffect(() => {
     if (!companyId || cities.length === 0) return
+    // Restore previously selected branches if user is returning to this step
+    // (e.g. from «Изменить период» on step 1 or from step 3 back-nav).
+    if (wizard.selectedBranchIds && wizard.selectedBranchIds.length > 0) {
+      setSelected(new Set(wizard.selectedBranchIds))
+    }
 
     let cancelled = false
     const initial: Record<string, CityState> = {}
@@ -68,7 +88,9 @@ export default function BranchSearchPage() {
         if (cancelled) return
         setCityStates((prev) => ({ ...prev, [city]: { status: 'searching' } }))
         try {
-          const response = await companiesApi.search(companyId, city)
+          // Search only across sources picked on step 1 — the backend defaults to «all»
+          // when sources is empty/undefined, so we must pass explicit list to honor the choice.
+          const response = await companiesApi.search(companyId, city, wizard.sources)
           if (cancelled) return
           setCityStates((prev) => ({
             ...prev,
@@ -112,7 +134,7 @@ export default function BranchSearchPage() {
     })
   }
 
-  const onLaunch = async () => {
+  const onNext = async () => {
     if (!companyId) return
     const branchIds = allItemsFlat
       .filter(({ item }) => selected.has(item.id))
@@ -124,8 +146,12 @@ export default function BranchSearchPage() {
     setSaving(true)
     setSaveError(null)
     try {
+      // Persist the selection on the company so step 3 (and re-entries to step 2)
+      // can render the picks even if sessionStorage is cleared. The actual analysis
+      // launch is going to happen on step 3 in a follow-up.
       await companiesApi.saveBranches(companyId, branchIds)
-      navigate('/history')
+      saveWizardState(companyId, { ...wizard, selectedBranchIds: branchIds })
+      navigate(`/analyses/new/${companyId}/summary`)
     } catch (err) {
       setSaveError(describeApiError(err, 'Не удалось сохранить выбор'))
     } finally {
@@ -151,6 +177,33 @@ export default function BranchSearchPage() {
             точные данные.
           </p>
         </div>
+
+        <Card className="mb-6 px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6">
+          <div className="flex items-start gap-3">
+            <CalendarRange size={18} className="text-brand mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <div className="text-xs text-text-tertiary uppercase tracking-wide">Период анализа</div>
+              <div className="text-sm font-medium text-text-primary truncate">
+                {formatPeriodSummary(wizard.period)}
+              </div>
+            </div>
+          </div>
+          <div className="hidden sm:block h-8 w-px bg-border-subtle" />
+          <div className="min-w-0 flex-1">
+            <div className="text-xs text-text-tertiary uppercase tracking-wide">Источники</div>
+            <div className="text-sm font-medium text-text-primary truncate">
+              {formatSourcesSummary(wizard.sources)}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate(`/analyses/new?from=${companyId}`)}
+            className="inline-flex items-center gap-1.5 text-sm text-brand hover:text-brand-hover transition-colors self-start sm:self-auto"
+          >
+            <Pencil size={14} />
+            Изменить
+          </button>
+        </Card>
 
         {companyQuery.isLoading && (
           <Card className="p-8 text-text-secondary">Загрузка анкеты компании…</Card>
@@ -202,16 +255,16 @@ export default function BranchSearchPage() {
                   Назад
                 </Button>
                 <Button
-                  onClick={onLaunch}
+                  onClick={onNext}
                   // Требуем чтобы все города дошли до финального состояния (done или error),
                   // но не требуем чтобы ВСЕ они нашли что-то. Если хоть один город дал
-                  // результаты и юзер что-то выбрал — можно запускать, упавшие/пустые
+                  // результаты и юзер что-то выбрал — можно идти дальше, упавшие/пустые
                   // города при сохранении просто проигнорируются (saveBranches принимает
                   // только выбранные ids).
                   disabled={!allFinished || saving || selected.size === 0}
                   className="gap-2"
                 >
-                  {saving ? 'Сохраняем…' : 'Запустить анализ'}
+                  {saving ? 'Сохраняем…' : 'Далее'}
                   {!saving && <ArrowRight size={18} />}
                 </Button>
               </div>
