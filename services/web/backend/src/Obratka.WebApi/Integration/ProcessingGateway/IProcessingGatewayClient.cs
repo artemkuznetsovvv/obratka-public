@@ -19,4 +19,6 @@ public interface IProcessingGatewayClient
     Task<JobBlobList> ListJobBlobsAsync(Guid jobId, CancellationToken ct);
 
     Task<JobBlobContent?> DownloadJobBlobAsync(Guid jobId, string name, CancellationToken ct);
+
+    Task<IReadOnlyList<BranchStatsItem>> GetBranchStatsAsync(Guid jobId, CancellationToken ct);
 }

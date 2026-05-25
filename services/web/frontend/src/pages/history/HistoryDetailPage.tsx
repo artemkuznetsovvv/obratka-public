@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -8,16 +8,25 @@ import {
   CalendarRange,
   Check,
   CheckCircle2,
+  ChevronDown,
   Clock,
+  Layers,
+  ListTree,
   Loader2,
+  MapPin,
   RefreshCcw,
   Sparkles,
 } from 'lucide-react'
 import { AppLayout } from '@/layouts/AppLayout'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { analysesApi, type AnalysisJob, type CollectionProgressEntry } from '@/api/analyses'
-import { companiesApi } from '@/api/companies'
+import {
+  analysesApi,
+  type AnalysisJob,
+  type BranchStatsDto,
+  type CollectionProgressEntry,
+} from '@/api/analyses'
+import { companiesApi, type LogicalBranchDto } from '@/api/companies'
 import { cn } from '@/lib/utils'
 import {
   approximateProgress,
@@ -190,9 +199,12 @@ export default function HistoryDetailPage() {
               </Card>
             )}
 
+            {/* Collapsible: параметры анализа (текущая группировка компании) */}
+            <AnalysisParamsCard companyId={job.companyId} />
+
             {/* Result */}
             {(job.status === 'completed' || job.status === 'partial') && (
-              <Card className="p-6">
+              <Card className="p-6 mt-6">
                 <div className="text-h3 text-text-primary mb-3 flex items-center gap-2">
                   <CheckCircle2 size={16} className="text-emerald-600" />
                   Результаты
@@ -209,7 +221,7 @@ export default function HistoryDetailPage() {
                   <StatCard label="Статус" value={meta.label} />
                 </div>
                 {job.summary ? (
-                  <div className="rounded-xl border border-border-subtle bg-page-bg/40 p-4">
+                  <div className="rounded-xl border border-border-subtle bg-page-bg/40 p-4 mb-4">
                     <div className="text-xs uppercase tracking-wide text-text-tertiary mb-1.5 flex items-center gap-1">
                       <Sparkles size={12} />
                       Резюме от AI
@@ -217,11 +229,14 @@ export default function HistoryDetailPage() {
                     <div className="text-sm text-text-primary whitespace-pre-line">{job.summary}</div>
                   </div>
                 ) : (
-                  <div className="text-sm text-text-tertiary">
+                  <div className="text-sm text-text-tertiary mb-4">
                     Сводка LLM ещё не получена. Если статус «Частично» — часть данных не собралась,
                     но финальный отчёт может всё равно сформироваться.
                   </div>
                 )}
+
+                <BranchStatsBlock jobId={job.id} companyId={job.companyId} />
+
                 <div className="mt-4 text-xs text-text-tertiary">
                   Полный дашборд и список рекомендаций — в следующих обновлениях.
                 </div>
@@ -628,4 +643,230 @@ function formatYmd(iso: string): string {
   const parts = ymd.split('-')
   if (parts.length !== 3) return iso
   return `${parts[2]}.${parts[1]}.${parts[0]}`
+}
+
+// ----- Collapsible: параметры анализа (выбранные филиалы) -----
+//
+// Читает companiesApi.listGroups(companyId) — это ТЕКУЩЕЕ состояние группировки
+// в Company, не snapshot. Если юзер успел перегруппировать после запуска — здесь
+// покажет новую группировку (см. processing-gateway-todo.md, пункт «snapshot
+// выбранных филиалов per-job»). Для MVP допустимо.
+function AnalysisParamsCard({ companyId }: { companyId: string }) {
+  const [expanded, setExpanded] = useState(false)
+  // Lazy load — query запускается только при первом раскрытии. После закрытия
+  // данные остаются в кеше TanStack, повторное открытие — мгновенное.
+  const groupsQuery = useQuery({
+    queryKey: ['company', companyId, 'groups'],
+    queryFn: () => companiesApi.listGroups(companyId),
+    enabled: expanded,
+    staleTime: 60_000,
+  })
+
+  const activeGroups = useMemo(
+    () =>
+      (groupsQuery.data ?? []).filter(
+        (g) => g.isSelected && g.providers.some((p) => p.isEnabled),
+      ),
+    [groupsQuery.data],
+  )
+
+  return (
+    <Card className="overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center justify-between gap-3 px-6 py-4 text-left hover:bg-page-bg/40 transition-colors"
+        aria-expanded={expanded}
+      >
+        <div className="flex items-center gap-2 text-h3 text-text-primary">
+          <ListTree size={16} className="text-text-tertiary" />
+          Параметры анализа
+        </div>
+        <ChevronDown
+          size={18}
+          className={cn(
+            'text-text-tertiary transition-transform',
+            expanded && 'rotate-180',
+          )}
+        />
+      </button>
+
+      {expanded && (
+        <div className="border-t border-border-subtle px-6 py-5">
+          {groupsQuery.isLoading ? (
+            <div className="text-sm text-text-tertiary">Загружаем группировку…</div>
+          ) : groupsQuery.isError ? (
+            <div className="text-sm text-destructive">
+              Не удалось загрузить: {(groupsQuery.error as Error).message}
+            </div>
+          ) : activeGroups.length === 0 ? (
+            <div className="text-sm text-text-tertiary">
+              Группировка не найдена — возможно, компания была перегруппирована или удалена.
+            </div>
+          ) : (
+            <>
+              <div className="mb-3 text-xs text-text-tertiary">
+                Текущая группировка компании ({activeGroups.length}{' '}
+                {pluralize(activeGroups.length, ['филиал', 'филиала', 'филиалов'])}).
+                Если меняли мастер после запуска — здесь видно последнее состояние,
+                а не то, с чем реально гонялся анализ.
+              </div>
+              <ul className="space-y-3">
+                {activeGroups.map((g) => (
+                  <ParamsBranchRow key={g.id} group={g} />
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function ParamsBranchRow({ group }: { group: LogicalBranchDto }) {
+  const activeProviders = group.providers.filter((p) => p.isEnabled)
+  return (
+    <li className="rounded-xl border border-border-subtle bg-card/40 px-4 py-3">
+      <div className="text-sm font-medium text-text-primary">{group.name || 'Без названия'}</div>
+      {group.address && (
+        <div className="text-xs text-text-tertiary mt-0.5 flex items-center gap-1">
+          <MapPin size={11} />
+          {group.address}
+        </div>
+      )}
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {activeProviders.map((p) => {
+          const meta = SOURCE_BADGE[p.source] ?? 'bg-page-bg text-text-secondary'
+          return (
+            <span
+              key={p.branchId}
+              className={cn(
+                'inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold',
+                meta,
+              )}
+            >
+              {SOURCE_LABEL[p.source] ?? p.source}
+            </span>
+          )
+        })}
+      </div>
+    </li>
+  )
+}
+
+// ----- Per-branch counts в Результатах -----
+
+function BranchStatsBlock({ jobId, companyId }: { jobId: string; companyId: string }) {
+  const statsQuery = useQuery({
+    queryKey: ['analyses', jobId, 'branch-stats'],
+    queryFn: () => analysesApi.branchStats(jobId),
+    staleTime: 30_000,
+  })
+
+  const grouped = useMemo(() => groupBranchStats(statsQuery.data ?? []), [statsQuery.data])
+  // Если job только что вышел в terminal статус — анализ уже сделан, но
+  // analysis_job_reviews могло ещё не зафиксироваться сразу. Показываем загрузку.
+  if (statsQuery.isLoading) {
+    return <div className="text-xs text-text-tertiary mt-2">Загружаем разбивку…</div>
+  }
+  if (statsQuery.isError) {
+    return (
+      <div className="text-xs text-destructive mt-2">
+        Не удалось получить разбивку по филиалам.
+      </div>
+    )
+  }
+  if (grouped.length === 0) return null
+
+  // Используем уникальный companyId как ключ для invalidate cache — на случай
+  // если разные jobs одной компании рендерятся в одной сессии.
+  void companyId
+
+  return (
+    <div className="mt-2">
+      <div className="text-xs uppercase tracking-wide text-text-tertiary mb-2 flex items-center gap-1">
+        <Layers size={12} />
+        Собрано по филиалам
+      </div>
+      <ul className="space-y-2">
+        {grouped.map((b) => (
+          <li
+            key={b.branchId}
+            className="rounded-xl border border-border-subtle bg-card/40 px-4 py-3"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-text-primary truncate">
+                  {b.branchName ?? <span className="italic text-text-tertiary">Филиал удалён</span>}
+                </div>
+                {b.branchAddress && (
+                  <div className="text-xs text-text-tertiary truncate">{b.branchAddress}</div>
+                )}
+              </div>
+              <div className="text-sm font-semibold text-text-primary shrink-0">
+                {b.total.toLocaleString('ru-RU')}{' '}
+                <span className="text-xs font-normal text-text-tertiary">
+                  {pluralize(b.total, ['отзыв', 'отзыва', 'отзывов'])}
+                </span>
+              </div>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {b.bySource.map((s) => {
+                const meta = SOURCE_BADGE[s.source] ?? 'bg-page-bg text-text-secondary'
+                return (
+                  <span
+                    key={s.source}
+                    className={cn(
+                      'inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold',
+                      meta,
+                    )}
+                  >
+                    {SOURCE_LABEL[s.source] ?? s.source}
+                    <span className="opacity-70">{s.count.toLocaleString('ru-RU')}</span>
+                  </span>
+                )
+              })}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+interface GroupedBranchStats {
+  branchId: string
+  branchName: string | null
+  branchAddress: string | null
+  total: number
+  bySource: Array<{ source: string; count: number }>
+}
+
+function groupBranchStats(stats: BranchStatsDto[]): GroupedBranchStats[] {
+  const map = new Map<string, GroupedBranchStats>()
+  for (const s of stats) {
+    let entry = map.get(s.branchId)
+    if (!entry) {
+      entry = {
+        branchId: s.branchId,
+        branchName: s.branchName,
+        branchAddress: s.branchAddress,
+        total: 0,
+        bySource: [],
+      }
+      map.set(s.branchId, entry)
+    }
+    entry.total += s.reviewCount
+    entry.bySource.push({ source: s.source, count: s.reviewCount })
+  }
+  return Array.from(map.values()).sort((a, b) => b.total - a.total)
+}
+
+function pluralize(n: number, forms: [string, string, string]): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return forms[0]
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return forms[1]
+  return forms[2]
 }

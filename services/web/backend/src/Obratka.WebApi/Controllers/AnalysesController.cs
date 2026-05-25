@@ -175,6 +175,59 @@ public sealed class AnalysesController(
         return Ok(job);
     }
 
+    // «Сколько отзывов собрано по конкретному филиалу × источнику» для блока «Результаты»
+    // на детальной странице. PG отдаёт чистые counts (branch_id + source + count), мы
+    // подмешиваем имя/адрес LogicalBranch из webapi_db чтобы фронт мог человеческие лейблы
+    // показать. LogicalBranch мог быть удалён юзером после запуска — тогда BranchName = null.
+    [HttpGet("{jobId:guid}/branch-stats")]
+    [ProducesResponseType(typeof(IReadOnlyList<BranchStatsDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<IReadOnlyList<BranchStatsDto>>> BranchStats(
+        Guid jobId, CancellationToken ct)
+    {
+        var ownerId = GetUserIdOrNull();
+        if (ownerId is null) return Unauthorized();
+
+        var job = await gateway.GetAnalysisAsync(jobId, ct);
+        if (job is null) return NotFound();
+        var owns = await db.Companies.AnyAsync(
+            c => c.Id == job.CompanyId && c.OwnerUserId == ownerId, ct);
+        if (!owns) return NotFound();
+
+        IReadOnlyList<BranchStatsItem> stats;
+        try
+        {
+            stats = await gateway.GetBranchStatsAsync(jobId, ct);
+        }
+        catch (ProcessingGatewayException ex)
+        {
+            logger.LogWarning(ex, "Processing Gateway вернул ошибку на branch-stats для {JobId}", jobId);
+            return Problem(
+                statusCode: StatusCodes.Status502BadGateway,
+                title: "Не удалось получить статистику",
+                detail: "Processing Gateway не отдал статистику по филиалам.");
+        }
+
+        if (stats.Count == 0) return Ok(Array.Empty<BranchStatsDto>());
+
+        var branchIds = stats.Select(s => s.BranchId).Distinct().ToHashSet();
+        var branches = await db.LogicalBranches.AsNoTracking()
+            .Where(lb => lb.CompanyId == job.CompanyId && branchIds.Contains(lb.Id))
+            .Select(lb => new { lb.Id, lb.Name, lb.Address })
+            .ToListAsync(ct);
+        var byId = branches.ToDictionary(b => b.Id);
+
+        var dto = stats
+            .Select(s =>
+            {
+                byId.TryGetValue(s.BranchId, out var info);
+                return new BranchStatsDto(
+                    s.BranchId, info?.Name, info?.Address, s.Source, s.ReviewCount);
+            })
+            .ToList();
+        return Ok(dto);
+    }
+
     private Guid? GetUserIdOrNull()
     {
         var id = userManager.GetUserId(User);

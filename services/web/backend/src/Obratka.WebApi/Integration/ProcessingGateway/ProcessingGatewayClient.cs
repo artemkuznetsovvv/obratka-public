@@ -91,6 +91,18 @@ internal sealed class ProcessingGatewayClient(HttpClient httpClient) : IProcessi
         return new JobBlobContent(stream, contentType, fileName, length);
     }
 
+    public async Task<IReadOnlyList<BranchStatsItem>> GetBranchStatsAsync(
+        Guid jobId, CancellationToken ct)
+    {
+        var response = await httpClient.GetAsync($"api/qa/analyses/{jobId}/branch-stats", ct);
+        await EnsureSuccess(response, ct);
+        var raw = await response.Content.ReadFromJsonAsync<RawBranchStatsResponse>(ct);
+        if (raw is null) return [];
+        return raw.Items
+            .Select(i => new BranchStatsItem(i.BranchId, i.Source, i.ReviewCount))
+            .ToList();
+    }
+
     private static async Task EnsureSuccess(HttpResponseMessage response, CancellationToken ct)
     {
         if (response.IsSuccessStatusCode) return;

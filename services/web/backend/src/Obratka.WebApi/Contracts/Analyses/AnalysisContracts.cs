@@ -11,3 +11,13 @@ public sealed record StartAnalysisRequest(
     DateTimeOffset? PeriodTo);
 
 public sealed record StartAnalysisResponse(Guid AnalysisJobId);
+
+// Агрегат «сколько отзывов собрано» в разрезе физический филиал × источник для конкретного job-а.
+// branchName — joined из webapi_db.LogicalBranches. Если LogicalBranch уже удалён (юзер
+// перегруппировал и сохранил), branchName будет null — на фронте показываем placeholder.
+public sealed record BranchStatsDto(
+    Guid BranchId,
+    string? BranchName,
+    string? BranchAddress,
+    string Source,
+    int ReviewCount);

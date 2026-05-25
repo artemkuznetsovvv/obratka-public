@@ -14,6 +14,14 @@ export interface StartAnalysisResponse {
   analysisJobId: string
 }
 
+export interface BranchStatsDto {
+  branchId: string
+  branchName: string | null
+  branchAddress: string | null
+  source: string
+  reviewCount: number
+}
+
 export const analysesApi = {
   start: (request: StartAnalysisRequest) =>
     http.post<StartAnalysisResponse>('/api/analyses/start', request).then((r) => r.data),
@@ -23,4 +31,7 @@ export const analysesApi = {
 
   get: (jobId: string) =>
     http.get<AnalysisJob>(`/api/analyses/${jobId}`).then((r) => r.data),
+
+  branchStats: (jobId: string) =>
+    http.get<BranchStatsDto[]>(`/api/analyses/${jobId}/branch-stats`).then((r) => r.data),
 }

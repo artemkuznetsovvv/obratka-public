@@ -97,6 +97,18 @@ public sealed record JobBlobContent(
     string? FileName,
     long? ContentLength);
 
+// branch-stats from PG: агрегаты (branch_id, source, review_count) для конкретного job-а.
+// branch_id — физический (LogicalBranch.Id) после нашего PR со StartAnalysisBranchSpec.
+internal sealed record RawBranchStatsItem(
+    [property: JsonPropertyName("branch_id")] Guid BranchId,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("review_count")] int ReviewCount);
+
+internal sealed record RawBranchStatsResponse(
+    [property: JsonPropertyName("items")] IReadOnlyList<RawBranchStatsItem> Items);
+
+public sealed record BranchStatsItem(Guid BranchId, string Source, int ReviewCount);
+
 // ----- Public DTOs (clean camelCase for Web API response to frontend) -----
 
 public sealed record AnalysisJobDto(
