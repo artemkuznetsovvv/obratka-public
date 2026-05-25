@@ -70,6 +70,11 @@ infra/.volumes/
 # ---------- Design assets (вне репо) ----------
 design/
 
+# ---------- Metrics specification (вне репо) ----------
+# PDF спецификация метрик дашборда — материал для агента,
+# не код. См. Web/CLAUDE-dashboards.md.
+metrics_info/
+
 # ---------- IDE / editor ----------
 .vscode/launch.json
 .vscode/tasks.json
