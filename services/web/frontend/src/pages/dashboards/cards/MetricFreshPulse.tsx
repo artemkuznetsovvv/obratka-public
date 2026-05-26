@@ -63,6 +63,7 @@ function FreshPulseView({ dto, isFetching }: { dto: FreshPulseMetricDto; isFetch
   }
 
   const indexRounded = Math.round(cur.index)
+  const previousRounded = dto.previous.index !== null ? Math.round(dto.previous.index) : null
   const verdict = pickVerdict(indexRounded)
   const dynamic = computeDynamic(cur.index, dto.previous.index)
 
@@ -111,7 +112,11 @@ function FreshPulseView({ dto, isFetching }: { dto: FreshPulseMetricDto; isFetch
       </div>
 
       {/* Динамика к прошлому месяцу */}
-      <DynamicLine dynamic={dynamic} />
+      <DynamicLine
+        dynamic={dynamic}
+        currentRounded={indexRounded}
+        previousRounded={previousRounded}
+      />
 
       <div className="text-[11px] text-text-tertiary mt-auto">
         по {cur.totalNonEmpty} {pluralize(cur.totalNonEmpty, ['отзыву', 'отзывам', 'отзывам'])} с оценкой LLM
@@ -155,7 +160,24 @@ function computeDynamic(currentIndex: number, previousIndex: number | null): Dyn
   return { tone: 'flat', diff }
 }
 
-function DynamicLine({ dynamic }: { dynamic: DynamicState }) {
+function DynamicLine({
+  dynamic,
+  currentRounded,
+  previousRounded,
+}: {
+  dynamic: DynamicState
+  currentRounded: number
+  previousRounded: number | null
+}) {
+  // Полная подсказка с явными «было / стало» — снимает двусмысленность
+  // прочтения «−N к прошлому месяцу» как абсолютного значения прошлого месяца.
+  const tooltip =
+    previousRounded === null
+      ? undefined
+      : `Прошлый месяц: ${previousRounded > 0 ? '+' : ''}${previousRounded}. Сейчас: ${
+          currentRounded > 0 ? '+' : ''
+        }${currentRounded}`
+
   if (dynamic.tone === 'unavailable') {
     return (
       <div className="text-xs text-text-tertiary">— нет данных за предыдущий месяц</div>
@@ -163,7 +185,10 @@ function DynamicLine({ dynamic }: { dynamic: DynamicState }) {
   }
   if (dynamic.tone === 'flat') {
     return (
-      <div className="flex items-center gap-1 text-xs text-text-tertiary">
+      <div
+        className="flex items-center gap-1 text-xs text-text-tertiary"
+        title={tooltip}
+      >
         <ArrowRight size={12} strokeWidth={2.5} />
         Без изменений к прошлому месяцу
       </div>
@@ -174,10 +199,13 @@ function DynamicLine({ dynamic }: { dynamic: DynamicState }) {
   const sign = dynamic.diff > 0 ? '+' : '−'
   const abs = Math.abs(dynamic.diff)
   return (
-    <div className={cn('flex items-center gap-1 text-xs font-medium tabular-nums', color)}>
+    <div
+      className={cn('flex items-center gap-1 text-xs font-medium tabular-nums', color)}
+      title={tooltip}
+    >
       <Icon size={12} strokeWidth={2.5} />
       {sign}
-      {abs} к прошлому месяцу
+      {abs} {pluralize(abs, ['пункт', 'пункта', 'пунктов'])} к прошлому месяцу
     </div>
   )
 }
