@@ -195,14 +195,6 @@ export default function BranchSearchPage() {
               {formatSourcesSummary(wizard.sources)}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => navigate(`/analyses/new?from=${companyId}`)}
-            className="inline-flex items-center gap-1.5 text-sm text-brand hover:text-brand-hover transition-colors self-start sm:self-auto"
-          >
-            <Pencil size={14} />
-            Изменить
-          </button>
         </Card>
 
         {companyQuery.isLoading && (
