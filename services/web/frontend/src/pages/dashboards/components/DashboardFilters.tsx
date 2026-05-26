@@ -138,16 +138,27 @@ export function DashboardFilters({ header }: { header: DashboardHeaderDto }) {
   )
 }
 
-// Период — нативный <input type="date"> на минималках. В будущем заменим
+// Период — нативный <input type="date"> + пресеты-кнопки. В будущем заменим
 // на react-day-picker, когда понадобится более богатый UX (пресеты, локаль и т.д.).
 function DateRange() {
   const f = useDashboardFilters()
   const fromValue = f.periodFrom ? f.periodFrom.slice(0, 10) : ''
   const toValue = f.periodTo ? f.periodTo.slice(0, 10) : ''
+
+  // Пресеты: sliding windows от «сегодня» (клиентское время — для UX юзеру
+  // понятнее «месяц от моего сегодня», бэк всё равно сравнивает с review_date
+  // по дате без TZ-нюансов).
+  const applyPreset = (daysBack: number) => {
+    const today = new Date()
+    const start = new Date(today)
+    start.setDate(start.getDate() - daysBack + 1)
+    f.setPeriod(toIsoDate(start), toIsoDate(today))
+  }
+
   return (
     <div className="flex flex-col gap-1">
       <span className="text-text-tertiary text-xs uppercase tracking-wide px-1">Период</span>
-      <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
         <input
           type="date"
           value={fromValue}
@@ -163,7 +174,31 @@ function DateRange() {
           onChange={(e) => f.setPeriod(f.periodFrom, e.target.value || null)}
           className="h-9 px-2 rounded-lg border border-border-subtle bg-card text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-brand/30"
         />
+        <div className="inline-flex items-center gap-0.5 rounded-lg bg-page-bg p-0.5 ml-1">
+          <PresetButton label="Неделя" onClick={() => applyPreset(7)} />
+          <PresetButton label="Месяц" onClick={() => applyPreset(30)} />
+          <PresetButton label="3 месяца" onClick={() => applyPreset(90)} />
+        </div>
       </div>
     </div>
   )
+}
+
+function PresetButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="px-2 py-1 rounded-md text-[11px] text-text-secondary hover:bg-card hover:text-text-primary hover:shadow-sm transition-all"
+    >
+      {label}
+    </button>
+  )
+}
+
+function toIsoDate(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
