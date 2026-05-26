@@ -433,8 +433,19 @@ function LogicalBranchBlock({
             // inline-edit. Свайпаем bubbling до label-а.
             onClick={(e) => e.preventDefault()}
           >
-            <div className="flex items-center gap-2 flex-wrap">
-              <EditableHeading value={group.name} onChange={onRename} />
+            {/* Иерархия перевёрнута: адрес сверху крупно, имя группы мельче
+                под ним. У разных физ. филиалов часто одинаковое название
+                («Skuratov Coffee roasters»), различить можно только адресом —
+                его и приоритизируем визуально. Имя остаётся редактируемым. */}
+            <div className="text-sm font-semibold text-text-primary truncate">
+              {group.address || <span className="italic text-text-tertiary">Адрес не указан</span>}
+            </div>
+            <div className="mt-0.5 flex items-center gap-2 flex-wrap">
+              <EditableHeading
+                value={group.name}
+                onChange={onRename}
+                textClass="text-xs text-text-secondary"
+              />
               {!isCustom && (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
                   <Sparkles size={10} /> Автогруппировка
@@ -446,9 +457,6 @@ function LogicalBranchBlock({
                 </span>
               )}
             </div>
-            {group.address && (
-              <div className="text-xs text-text-tertiary mt-0.5 truncate">{group.address}</div>
-            )}
           </div>
         </label>
         <button
@@ -492,10 +500,12 @@ function LogicalBranchBlock({
                 {meta.label}
               </span>
               <div className="flex-1 min-w-0">
-                <div className="text-sm text-text-primary truncate">{card.name}</div>
-                {card.address && (
-                  <div className="text-xs text-text-tertiary truncate">{card.address}</div>
-                )}
+                {/* Адрес — главный идентификатор провайдерской карточки
+                    (см. комментарий в LogicalBranchBlock о приоритизации). */}
+                <div className="text-sm text-text-primary truncate">
+                  {card.address || <span className="italic text-text-tertiary">Адрес не указан</span>}
+                </div>
+                <div className="text-xs text-text-tertiary truncate">{card.name}</div>
               </div>
               {card.rating !== null && (
                 <div className="hidden sm:flex items-center gap-1 text-sm text-text-secondary shrink-0">
@@ -543,7 +553,18 @@ function LogicalBranchBlock({
 // карандаша на hover'е; клик по карандашу/тексту → input на месте; Enter / blur
 // сохраняет, Escape отменяет. Юзер может задать собственное название для физ. филиала
 // (особенно важно когда автоматика дала одинаковые имена из бренда).
-function EditableHeading({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function EditableHeading({
+  value,
+  onChange,
+  // textClass — стиль текста в обоих состояниях (просмотр и редактирование).
+  // По умолчанию крупный «заголовочный»; для случаев, когда адрес важнее имени
+  // и хочется задвинуть имя на вторичный уровень — можно передать text-xs etc.
+  textClass = 'text-sm font-semibold text-text-primary',
+}: {
+  value: string
+  onChange: (v: string) => void
+  textClass?: string
+}) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -582,7 +603,10 @@ function EditableHeading({ value, onChange }: { value: string; onChange: (v: str
             }
           }}
           maxLength={500}
-          className="px-2 py-0.5 rounded border border-border-subtle bg-card text-sm font-semibold text-text-primary focus:outline-none focus:ring-2 focus:ring-ring max-w-[320px]"
+          className={cn(
+            'px-2 py-0.5 rounded border border-border-subtle bg-card focus:outline-none focus:ring-2 focus:ring-ring max-w-[320px]',
+            textClass,
+          )}
         />
         <button
           type="button"
@@ -605,7 +629,7 @@ function EditableHeading({ value, onChange }: { value: string; onChange: (v: str
       className="group inline-flex items-center gap-1.5 text-left max-w-full hover:text-brand transition-colors"
       title="Переименовать филиал"
     >
-      <span className="text-sm font-semibold text-text-primary truncate group-hover:text-brand">
+      <span className={cn('truncate group-hover:text-brand', textClass)}>
         {value || <span className="italic text-text-tertiary">Без названия</span>}
       </span>
       <Pencil size={12} className="text-text-tertiary opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
