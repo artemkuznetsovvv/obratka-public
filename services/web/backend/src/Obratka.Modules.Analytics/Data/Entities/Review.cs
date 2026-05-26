@@ -12,4 +12,9 @@ public sealed class Review
     public string Source { get; init; } = string.Empty;
     public DateTimeOffset ReviewDate { get; init; }
     public short? Stars { get; init; }
+    // raw_text — оригинальный текст отзыва. Используется в endpoint'ах
+    // «топ примеров» (М3 раскрытие, опц. блок «Топ позитивных/негативных»).
+    // Тяжёлое поле — НЕ Select'им в чисто-counts метриках, чтобы не тащить
+    // лишние мегабайты.
+    public string RawText { get; init; } = string.Empty;
 }

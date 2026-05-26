@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { Card } from '@/components/ui/card'
@@ -5,6 +6,9 @@ import { metricsApi, type SentimentDistributionMetricDto } from '@/api/metrics'
 import { cn } from '@/lib/utils'
 import { useDashboardFilters } from '../DashboardFiltersContext'
 import { MetricErrorCard, MetricSkeletonCard } from './shared/CardParts'
+import { SentimentReviewsDialog } from './SentimentReviewsDialog'
+
+type Sentiment = 'позитивный' | 'нейтральный' | 'негативный'
 
 // Метрика М3 «Настроение клиентов» (per-branch).
 // Не принимает фильтр sentiments (исключение — см. SentimentDistributionMetricService).
@@ -43,21 +47,36 @@ export function MetricSentimentDistribution({ branchId }: { branchId: string }) 
   if (q.isError) return <MetricErrorCard message={(q.error as Error).message} />
   if (!q.data) return <MetricSkeletonCard />
 
-  return <SentimentView dto={q.data} slug="М3" title="Настроение клиентов" isFetching={q.isFetching && !q.isLoading} />
+  return (
+    <SentimentView
+      dto={q.data}
+      slug="М3"
+      title="Настроение клиентов"
+      isFetching={q.isFetching && !q.isLoading}
+      branchIds={[branchId]}
+      scopeLabel="в этом филиале за выбранный период"
+    />
+  )
 }
 
-// Shared view М3/О3 — структура и логика одинаковые, разница в slug+title+filter source.
+// Shared view М3/О3 — структура и логика одинаковые, разница в slug+title+
+// branchIds+scopeLabel (для модалки раскрытия).
 export function SentimentView({
   dto,
   slug,
   title,
   isFetching,
+  branchIds,
+  scopeLabel,
 }: {
   dto: SentimentDistributionMetricDto
   slug: string
   title: string
   isFetching: boolean
+  branchIds: string[]
+  scopeLabel: string
 }) {
+  const [openSentiment, setOpenSentiment] = useState<Sentiment | null>(null)
   const { totalNonEmpty } = dto
 
   // Empty state по спеке: «общий «—», полоса и фраза скрыты».
@@ -91,11 +110,27 @@ export function SentimentView({
       {/* Фраза-вывод */}
       <div className={cn('text-xl font-bold', verdict.colorClass)}>{verdict.text}</div>
 
-      {/* Stacked bar: красный → серый → зелёный (слева направо по спеке) */}
+      {/* Stacked bar: красный → серый → зелёный (слева направо по спеке).
+          Сегменты кликабельны → открывают модалку с отзывами этого sentiment'а. */}
       <div className="flex h-7 rounded-full overflow-hidden bg-page-bg" title={`${negPct}% / ${neuPct}% / ${posPct}%`}>
-        <Segment pct={negPct} className="bg-rose-500 text-white" label="плохо" />
-        <Segment pct={neuPct} className="bg-slate-400 text-white" label="нейтрально" />
-        <Segment pct={posPct} className="bg-emerald-500 text-white" label="хорошо" />
+        <Segment
+          pct={negPct}
+          className="bg-rose-500 hover:bg-rose-600 text-white"
+          label="плохо"
+          onClick={() => setOpenSentiment('негативный')}
+        />
+        <Segment
+          pct={neuPct}
+          className="bg-slate-400 hover:bg-slate-500 text-white"
+          label="нейтрально"
+          onClick={() => setOpenSentiment('нейтральный')}
+        />
+        <Segment
+          pct={posPct}
+          className="bg-emerald-500 hover:bg-emerald-600 text-white"
+          label="хорошо"
+          onClick={() => setOpenSentiment('позитивный')}
+        />
       </div>
 
       {/* Легенда */}
@@ -105,7 +140,17 @@ export function SentimentView({
         <LegendDot color="bg-emerald-500" label="Хорошо" />
       </div>
 
-      <div className="text-[11px] text-text-tertiary">по {totalNonEmpty} отзывам с оценкой LLM</div>
+      <div className="text-[11px] text-text-tertiary">
+        по {totalNonEmpty} отзывам с оценкой LLM · клик по сегменту — отзывы
+      </div>
+
+      <SentimentReviewsDialog
+        open={openSentiment !== null}
+        onOpenChange={(next) => !next && setOpenSentiment(null)}
+        branchIds={branchIds}
+        sentiment={openSentiment}
+        scopeLabel={scopeLabel}
+      />
     </Card>
   )
 }
@@ -119,20 +164,33 @@ function Header({ slug, title }: { slug: string; title: string }) {
   )
 }
 
-function Segment({ pct, className, label }: { pct: number; className: string; label: string }) {
+function Segment({
+  pct,
+  className,
+  label,
+  onClick,
+}: {
+  pct: number
+  className: string
+  label: string
+  onClick: () => void
+}) {
   if (pct === 0) return null
   return (
-    <div
+    <button
+      type="button"
+      onClick={onClick}
       className={cn(
-        'flex items-center justify-center text-[11px] font-semibold tabular-nums',
+        'flex items-center justify-center text-[11px] font-semibold tabular-nums transition-colors focus:outline-none focus:ring-2 focus:ring-brand/40',
         className,
       )}
       style={{ width: `${pct}%` }}
-      title={`${label}: ${pct}%`}
+      title={`${label}: ${pct}% — нажмите чтобы посмотреть отзывы`}
+      aria-label={`${label}: ${pct}%, открыть отзывы`}
     >
       {/* Не показываем число если сегмент совсем тонкий — иначе текст вылазит */}
       {pct >= 8 ? `${pct}%` : ''}
-    </div>
+    </button>
   )
 }
 

@@ -30,6 +30,7 @@ public sealed class ProcessingReadContext(DbContextOptions<ProcessingReadContext
             e.Property(r => r.Source).HasColumnName("source");
             e.Property(r => r.ReviewDate).HasColumnName("review_date");
             e.Property(r => r.Stars).HasColumnName("stars");
+            e.Property(r => r.RawText).HasColumnName("raw_text");
         });
 
         modelBuilder.Entity<ReviewLlmResult>(e =>

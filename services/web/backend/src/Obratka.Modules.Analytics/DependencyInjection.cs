@@ -33,6 +33,7 @@ public static class DependencyInjection
             services.AddScoped<IReviewCountMetricService, ReviewCountMetricService>();
             services.AddScoped<IAverageRatingMetricService, AverageRatingMetricService>();
             services.AddScoped<ISentimentDistributionMetricService, SentimentDistributionMetricService>();
+            services.AddScoped<ISentimentReviewsService, SentimentReviewsService>();
         }
 
         return services;

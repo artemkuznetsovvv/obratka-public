@@ -66,6 +66,27 @@ export interface SentimentDistributionQuery {
   stars: number[]
 }
 
+// Список отзывов конкретной тональности для модалки раскрытия М3/О3.
+// Сортировка ReviewDate DESC, limit/offset для постраничной подгрузки.
+export interface SentimentReviewItemDto {
+  id: number
+  source: string
+  reviewDate: string
+  stars: number | null
+  text: string
+}
+
+export interface SentimentReviewsDto {
+  items: SentimentReviewItemDto[]
+  hasMore: boolean
+}
+
+export interface SentimentReviewsQuery extends SentimentDistributionQuery {
+  sentiment: 'позитивный' | 'нейтральный' | 'негативный'
+  limit?: number
+  offset?: number
+}
+
 export const metricsApi = {
   reviewCount: (jobId: string, q: ReviewCountQuery) =>
     http
@@ -85,23 +106,39 @@ export const metricsApi = {
     http
       .get<SentimentDistributionMetricDto>(
         `/api/analyses/${jobId}/metrics/sentiment-distribution`,
+        { params: buildSentimentParams(q) },
+      )
+      .then((r) => r.data),
+
+  sentimentReviews: (jobId: string, q: SentimentReviewsQuery) =>
+    http
+      .get<SentimentReviewsDto>(
+        `/api/analyses/${jobId}/metrics/sentiment-reviews`,
         {
           params: {
-            branchIds: q.branchIds.join(','),
-            from: q.from ?? undefined,
-            to: q.to ?? undefined,
-            // sources фильтрует на бэке (в отличие от М1/М2 где фильтр идёт UI-side).
-            // Правило «все = не фильтрую» — то же, для consistency с другими фильтрами.
-            sources: shouldSendFilter(q.sources, 3)
-              ? q.sources.join(',')
-              : undefined,
-            stars: shouldSendFilter(q.stars, ALL_STARS.length)
-              ? q.stars.join(',')
-              : undefined,
+            ...buildSentimentParams(q),
+            sentiment: q.sentiment,
+            limit: q.limit,
+            offset: q.offset,
           },
         },
       )
       .then((r) => r.data),
+}
+
+// Параметры sentiment-distribution и sentiment-reviews идентичны — выносим в helper.
+function buildSentimentParams(q: SentimentDistributionQuery) {
+  return {
+    branchIds: q.branchIds.join(','),
+    from: q.from ?? undefined,
+    to: q.to ?? undefined,
+    // sources фильтрует на бэке (в отличие от М1/М2 где фильтр идёт UI-side).
+    // Правило «все = не фильтрую» — то же, для consistency с другими фильтрами.
+    sources: shouldSendFilter(q.sources, 3) ? q.sources.join(',') : undefined,
+    stars: shouldSendFilter(q.stars, ALL_STARS.length)
+      ? q.stars.join(',')
+      : undefined,
+  }
 }
 
 // Один и тот же набор query-параметров переиспользуется всеми /metrics/*

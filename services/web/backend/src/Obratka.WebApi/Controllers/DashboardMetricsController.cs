@@ -21,7 +21,8 @@ public sealed class DashboardMetricsController(
     UserManager<ApplicationUser> userManager,
     IReviewCountMetricService? reviewCountService = null,
     IAverageRatingMetricService? averageRatingService = null,
-    ISentimentDistributionMetricService? sentimentDistributionService = null) : ControllerBase
+    ISentimentDistributionMetricService? sentimentDistributionService = null,
+    ISentimentReviewsService? sentimentReviewsService = null) : ControllerBase
 {
     // Метрика 1 «Количество отзывов» (per-branch) и О1 «Всего отзывов по сети»
     // (мульти-branch) — оба используют этот endpoint. Разница только в branchIds:
@@ -206,6 +207,75 @@ public sealed class DashboardMetricsController(
             Neutral: result.Neutral,
             Negative: result.Negative,
             TotalNonEmpty: result.TotalNonEmpty));
+    }
+
+    // Список отзывов конкретной тональности — для модалки раскрытия М3/О3.
+    // ADR-003 разрешает одно raw-обращение к reviews × review_llm_results для
+    // «топ-N» (см. §«Топ-N»). Сортировка ReviewDate DESC, limit/offset для
+    // пагинации (limit ≤ 200, server-side clamp).
+    [HttpGet("sentiment-reviews")]
+    [ProducesResponseType(typeof(SentimentReviewsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<ActionResult<SentimentReviewsDto>> SentimentReviews(
+        Guid jobId,
+        [FromQuery] string? branchIds,
+        [FromQuery] string? sentiment,
+        [FromQuery] DateTimeOffset? from,
+        [FromQuery] DateTimeOffset? to,
+        [FromQuery] string? sources,
+        [FromQuery] string? stars,
+        [FromQuery] int? limit,
+        [FromQuery] int? offset,
+        CancellationToken ct)
+    {
+        if (sentimentReviewsService is null)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "Analytics не сконфигурирован",
+                detail: "ConnectionStrings:ProcessingReadDb пустой — Analytics-модуль не подключён к processing_db.");
+        }
+
+        var branchList = ParseGuids(branchIds);
+        if (branchList is null || branchList.Count == 0)
+            return BadRequest(new { error = "branchIds is required (CSV of guids, at least one)" });
+
+        if (string.IsNullOrWhiteSpace(sentiment))
+            return BadRequest(new { error = "sentiment is required (one of: позитивный, нейтральный, негативный)" });
+
+        // Защита от мусора в query — sentiment строго один из 3 schema 2.0 значений.
+        if (sentiment is not "позитивный" and not "нейтральный" and not "негативный")
+            return BadRequest(new { error = "sentiment must be one of: позитивный, нейтральный, негативный" });
+
+        var ownerId = GetUserIdOrNull();
+        if (ownerId is null) return Unauthorized();
+
+        var job = await gateway.GetAnalysisAsync(jobId, ct);
+        if (job is null) return NotFound();
+        var owns = await db.Companies.AnyAsync(
+            c => c.Id == job.CompanyId && c.OwnerUserId == ownerId, ct);
+        if (!owns) return NotFound();
+
+        var result = await sentimentReviewsService.ListAsync(
+            new SentimentReviewsQuery(
+                JobId: jobId,
+                BranchIds: branchList,
+                Sentiment: sentiment,
+                From: from,
+                To: to,
+                Sources: ParseCsv(sources),
+                Stars: ParseStars(stars),
+                Limit: limit ?? 50,
+                Offset: offset ?? 0),
+            ct);
+
+        return Ok(new SentimentReviewsDto(
+            Items: result.Items
+                .Select(i => new SentimentReviewItemDto(i.Id, i.Source, i.ReviewDate, i.Stars, i.Text))
+                .ToList(),
+            HasMore: result.HasMore));
     }
 
     private static IReadOnlyCollection<Guid>? ParseGuids(string? csv)
