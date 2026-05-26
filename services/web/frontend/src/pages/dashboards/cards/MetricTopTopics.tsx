@@ -96,12 +96,7 @@ function TopTopicsView({
 
 function Header() {
   return (
-    <div className="flex items-baseline justify-between gap-2">
-      <div className="text-sm font-semibold text-text-primary">О чём говорят чаще всего</div>
-      <span className="text-[10px] uppercase tracking-wide text-text-tertiary font-mono">
-        М5
-      </span>
-    </div>
+    <div className="text-sm font-semibold text-text-primary">О чём говорят чаще всего</div>
   )
 }
 

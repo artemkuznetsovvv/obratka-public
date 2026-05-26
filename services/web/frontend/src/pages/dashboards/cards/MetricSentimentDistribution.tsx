@@ -50,7 +50,6 @@ export function MetricSentimentDistribution({ branchId }: { branchId: string }) 
   return (
     <SentimentView
       dto={q.data}
-      slug="М3"
       title="Настроение клиентов"
       isFetching={q.isFetching && !q.isLoading}
       branchIds={[branchId]}
@@ -59,18 +58,16 @@ export function MetricSentimentDistribution({ branchId }: { branchId: string }) 
   )
 }
 
-// Shared view М3/О3 — структура и логика одинаковые, разница в slug+title+
-// branchIds+scopeLabel (для модалки раскрытия).
+// Shared view М3/О3 — структура и логика одинаковые, разница в title +
+// branchIds + scopeLabel (для модалки раскрытия).
 export function SentimentView({
   dto,
-  slug,
   title,
   isFetching,
   branchIds,
   scopeLabel,
 }: {
   dto: SentimentDistributionMetricDto
-  slug: string
   title: string
   isFetching: boolean
   branchIds: string[]
@@ -83,7 +80,7 @@ export function SentimentView({
   if (totalNonEmpty === 0) {
     return (
       <Card className={cn('p-5 flex flex-col gap-3', isFetching && 'opacity-70')}>
-        <Header slug={slug} title={title} />
+        <Header title={title} />
         <div className="text-sm text-text-tertiary">Нет данных</div>
       </Card>
     )
@@ -105,7 +102,7 @@ export function SentimentView({
         isFetching && 'opacity-70',
       )}
     >
-      <Header slug={slug} title={title} />
+      <Header title={title} />
 
       {/* Фраза-вывод */}
       <div className={cn('text-xl font-bold', verdict.colorClass)}>{verdict.text}</div>
@@ -155,13 +152,8 @@ export function SentimentView({
   )
 }
 
-function Header({ slug, title }: { slug: string; title: string }) {
-  return (
-    <div className="flex items-baseline justify-between gap-2">
-      <div className="text-sm font-semibold text-text-primary">{title}</div>
-      <span className="text-[10px] uppercase tracking-wide text-text-tertiary font-mono">{slug}</span>
-    </div>
-  )
+function Header({ title }: { title: string }) {
+  return <div className="text-sm font-semibold text-text-primary">{title}</div>
 }
 
 function Segment({

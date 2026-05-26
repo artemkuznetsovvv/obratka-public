@@ -105,7 +105,6 @@ function Header({
             </button>
           ))}
         </div>
-        <span className="text-[10px] uppercase tracking-wide text-text-tertiary font-mono ml-1">М7</span>
       </div>
     </div>
   )

@@ -44,10 +44,7 @@ export function MetricNetworkSentimentDistribution() {
   if (noBranches) {
     return (
       <Card className="p-5 min-h-[12rem] flex flex-col gap-3">
-        <div className="flex items-baseline justify-between gap-2">
-          <div className="text-sm font-semibold text-text-primary">Настроение по сети</div>
-          <span className="text-[10px] uppercase tracking-wide text-text-tertiary font-mono">О3</span>
-        </div>
+        <div className="text-sm font-semibold text-text-primary">Настроение по сети</div>
         <div className="text-sm text-text-tertiary">Снимите фильтр «Филиал», чтобы увидеть сводку.</div>
       </Card>
     )
@@ -60,7 +57,6 @@ export function MetricNetworkSentimentDistribution() {
   return (
     <SentimentView
       dto={q.data}
-      slug="О3"
       title="Настроение по сети"
       isFetching={q.isFetching && !q.isLoading}
       branchIds={filters.branches}

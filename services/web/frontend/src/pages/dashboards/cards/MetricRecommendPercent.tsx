@@ -112,10 +112,7 @@ function RecommendPercentView({
 
 function Header() {
   return (
-    <div className="flex items-baseline justify-between gap-2">
-      <div className="text-sm font-semibold text-text-primary">Сколько клиентов рекомендуют</div>
-      <span className="text-[10px] uppercase tracking-wide text-text-tertiary font-mono">М6</span>
-    </div>
+    <div className="text-sm font-semibold text-text-primary">Сколько клиентов рекомендуют</div>
   )
 }
 

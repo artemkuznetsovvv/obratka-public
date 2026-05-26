@@ -104,14 +104,7 @@ export function MetricNetworkTotalReviews() {
 
 function Header() {
   return (
-    <div className="flex items-baseline justify-between gap-2">
-      <div className="text-sm font-semibold text-text-primary">
-        Всего отзывов по сети
-      </div>
-      <span className="text-[10px] uppercase tracking-wide text-text-tertiary font-mono">
-        О1
-      </span>
-    </div>
+    <div className="text-sm font-semibold text-text-primary">Всего отзывов по сети</div>
   )
 }
 

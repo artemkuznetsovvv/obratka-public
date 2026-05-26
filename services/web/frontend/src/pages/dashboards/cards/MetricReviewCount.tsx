@@ -110,13 +110,8 @@ function ReviewCountView({
       )}
     >
       {/* Заголовок карточки */}
-      <div className="flex items-baseline justify-between gap-2">
-        <div className="text-sm font-semibold text-text-primary">
-          Количество отзывов
-        </div>
-        <span className="text-[10px] uppercase tracking-wide text-text-tertiary font-mono">
-          М1
-        </span>
+      <div className="text-sm font-semibold text-text-primary">
+        Количество отзывов
       </div>
 
       {/* Блок 1: крупное число + тренд */}

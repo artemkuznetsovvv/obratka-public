@@ -127,12 +127,9 @@ function FreshPulseView({ dto, isFetching }: { dto: FreshPulseMetricDto; isFetch
 
 function Header() {
   return (
-    <div className="flex items-baseline justify-between gap-2">
-      <div className="min-w-0">
-        <div className="text-sm font-semibold text-text-primary">Свежий пульс</div>
-        <div className="text-[11px] text-text-tertiary">за последний месяц</div>
-      </div>
-      <span className="text-[10px] uppercase tracking-wide text-text-tertiary font-mono">М4</span>
+    <div>
+      <div className="text-sm font-semibold text-text-primary">Свежий пульс</div>
+      <div className="text-[11px] text-text-tertiary">за последний месяц</div>
     </div>
   )
 }

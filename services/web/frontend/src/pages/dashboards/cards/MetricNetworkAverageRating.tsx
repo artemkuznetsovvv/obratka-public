@@ -73,12 +73,7 @@ export function MetricNetworkAverageRating() {
 
 function Header() {
   return (
-    <div className="flex items-baseline justify-between gap-2">
-      <div className="text-sm font-semibold text-text-primary">Средний рейтинг по сети</div>
-      <span className="text-[10px] uppercase tracking-wide text-text-tertiary font-mono">
-        О2
-      </span>
-    </div>
+    <div className="text-sm font-semibold text-text-primary">Средний рейтинг по сети</div>
   )
 }
 

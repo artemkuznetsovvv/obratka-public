@@ -101,12 +101,7 @@ function AverageRatingView({
         isFetching && 'opacity-70',
       )}
     >
-      <div className="flex items-baseline justify-between gap-2">
-        <div className="text-sm font-semibold text-text-primary">Средний рейтинг</div>
-        <span className="text-[10px] uppercase tracking-wide text-text-tertiary font-mono">
-          М2
-        </span>
-      </div>
+      <div className="text-sm font-semibold text-text-primary">Средний рейтинг</div>
 
       {/* Главное число */}
       <div className="flex items-baseline gap-2">
