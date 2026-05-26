@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Obratka.Modules.Analytics.Data;
+using Obratka.Modules.Analytics.Metrics.AverageRating;
 using Obratka.Modules.Analytics.Metrics.ReviewCount;
 
 namespace Obratka.Modules.Analytics;
@@ -29,6 +30,7 @@ public static class DependencyInjection
             services.AddDbContext<ProcessingReadContext>(options =>
                 options.UseNpgsql(cs));
             services.AddScoped<IReviewCountMetricService, ReviewCountMetricService>();
+            services.AddScoped<IAverageRatingMetricService, AverageRatingMetricService>();
         }
 
         return services;
