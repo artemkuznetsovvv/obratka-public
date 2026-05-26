@@ -5,6 +5,7 @@ import { useDashboardFilters } from '../DashboardFiltersContext'
 import { MetricCardPlaceholder } from './MetricCardPlaceholder'
 import { MetricReviewCount } from '../cards/MetricReviewCount'
 import { MetricAverageRating } from '../cards/MetricAverageRating'
+import { MetricSentimentDistribution } from '../cards/MetricSentimentDistribution'
 
 // Секция одного филиала. По спеке:
 //   - Базовый слой: метрики 1, 2, 3 (горизонтальный ряд)
@@ -50,7 +51,7 @@ export function BranchSection({ branch }: { branch: DashboardBranchDto }) {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
         <MetricReviewCount branchId={branch.branchId} />
         <MetricAverageRating branchId={branch.branchId} />
-        <MetricCardPlaceholder slug="М3" title="Настроение клиентов" />
+        <MetricSentimentDistribution branchId={branch.branchId} />
       </div>
 
       {/* Расширенный слой: 4, 5, 6, 7 */}

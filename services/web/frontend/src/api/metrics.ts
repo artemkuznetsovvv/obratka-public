@@ -48,6 +48,24 @@ export interface AverageRatingMetricDto {
 // Параметры идентичны ReviewCountQuery — переиспользуем тип.
 export type AverageRatingQuery = ReviewCountQuery
 
+// Метрика 3 «Настроение клиентов». Counts по 3 sentiment-bucket'ам;
+// totalNonEmpty=0 → empty state «Нет данных».
+export interface SentimentDistributionMetricDto {
+  positive: number
+  neutral: number
+  negative: number
+  totalNonEmpty: number
+}
+
+// М3/О3 принимает SOURCES (а не sentiments — она сама про sentiments).
+export interface SentimentDistributionQuery {
+  branchIds: string[]
+  from: string | null
+  to: string | null
+  sources: string[]
+  stars: number[]
+}
+
 export const metricsApi = {
   reviewCount: (jobId: string, q: ReviewCountQuery) =>
     http
@@ -61,6 +79,28 @@ export const metricsApi = {
       .get<AverageRatingMetricDto>(`/api/analyses/${jobId}/metrics/average-rating`, {
         params: buildParams(q),
       })
+      .then((r) => r.data),
+
+  sentimentDistribution: (jobId: string, q: SentimentDistributionQuery) =>
+    http
+      .get<SentimentDistributionMetricDto>(
+        `/api/analyses/${jobId}/metrics/sentiment-distribution`,
+        {
+          params: {
+            branchIds: q.branchIds.join(','),
+            from: q.from ?? undefined,
+            to: q.to ?? undefined,
+            // sources фильтрует на бэке (в отличие от М1/М2 где фильтр идёт UI-side).
+            // Правило «все = не фильтрую» — то же, для consistency с другими фильтрами.
+            sources: shouldSendFilter(q.sources, 3)
+              ? q.sources.join(',')
+              : undefined,
+            stars: shouldSendFilter(q.stars, ALL_STARS.length)
+              ? q.stars.join(',')
+              : undefined,
+          },
+        },
+      )
       .then((r) => r.data),
 }
 

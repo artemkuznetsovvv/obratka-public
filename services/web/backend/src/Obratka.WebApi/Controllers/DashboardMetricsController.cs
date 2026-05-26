@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Obratka.Modules.Analytics.Metrics.AverageRating;
 using Obratka.Modules.Analytics.Metrics.ReviewCount;
+using Obratka.Modules.Analytics.Metrics.SentimentDistribution;
 using Obratka.WebApi.Auth;
 using Obratka.WebApi.Contracts.Dashboards;
 using Obratka.WebApi.Data;
@@ -19,7 +20,8 @@ public sealed class DashboardMetricsController(
     IProcessingGatewayClient gateway,
     UserManager<ApplicationUser> userManager,
     IReviewCountMetricService? reviewCountService = null,
-    IAverageRatingMetricService? averageRatingService = null) : ControllerBase
+    IAverageRatingMetricService? averageRatingService = null,
+    ISentimentDistributionMetricService? sentimentDistributionService = null) : ControllerBase
 {
     // Метрика 1 «Количество отзывов» (per-branch) и О1 «Всего отзывов по сети»
     // (мульти-branch) — оба используют этот endpoint. Разница только в branchIds:
@@ -146,6 +148,64 @@ public sealed class DashboardMetricsController(
                 .Select(kv => new AverageRatingSourceDto(kv.Key, kv.Value.Average, kv.Value.Count))
                 .ToList());
         return Ok(dto);
+    }
+
+    // Метрика 3 «Настроение клиентов» (per-branch) и О3 «Настроение по сети»
+    // (мульти-branch). Возвращает counts по 3 sentiment-bucket'ам; фронт сам
+    // считает проценты и применяет таблицу «фраза-вывод».
+    //
+    // ВАЖНО: фильтр sentiments сюда не принимаем — метрика сама показывает
+    // разрез по sentiments (см. SentimentDistributionMetricService).
+    [HttpGet("sentiment-distribution")]
+    [ProducesResponseType(typeof(SentimentDistributionMetricDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<ActionResult<SentimentDistributionMetricDto>> SentimentDistribution(
+        Guid jobId,
+        [FromQuery] string? branchIds,
+        [FromQuery] DateTimeOffset? from,
+        [FromQuery] DateTimeOffset? to,
+        [FromQuery] string? sources,
+        [FromQuery] string? stars,
+        CancellationToken ct)
+    {
+        if (sentimentDistributionService is null)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "Analytics не сконфигурирован",
+                detail: "ConnectionStrings:ProcessingReadDb пустой — Analytics-модуль не подключён к processing_db.");
+        }
+
+        var branchList = ParseGuids(branchIds);
+        if (branchList is null || branchList.Count == 0)
+            return BadRequest(new { error = "branchIds is required (CSV of guids, at least one)" });
+
+        var ownerId = GetUserIdOrNull();
+        if (ownerId is null) return Unauthorized();
+
+        var job = await gateway.GetAnalysisAsync(jobId, ct);
+        if (job is null) return NotFound();
+        var owns = await db.Companies.AnyAsync(
+            c => c.Id == job.CompanyId && c.OwnerUserId == ownerId, ct);
+        if (!owns) return NotFound();
+
+        var result = await sentimentDistributionService.ComputeAsync(
+            new SentimentDistributionQuery(
+                JobId: jobId,
+                BranchIds: branchList,
+                From: from,
+                To: to,
+                Sources: ParseCsv(sources),
+                Stars: ParseStars(stars)),
+            ct);
+
+        return Ok(new SentimentDistributionMetricDto(
+            Positive: result.Positive,
+            Neutral: result.Neutral,
+            Negative: result.Negative,
+            TotalNonEmpty: result.TotalNonEmpty));
     }
 
     private static IReadOnlyCollection<Guid>? ParseGuids(string? csv)

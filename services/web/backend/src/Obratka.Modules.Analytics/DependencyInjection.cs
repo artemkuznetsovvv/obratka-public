@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Obratka.Modules.Analytics.Data;
 using Obratka.Modules.Analytics.Metrics.AverageRating;
 using Obratka.Modules.Analytics.Metrics.ReviewCount;
+using Obratka.Modules.Analytics.Metrics.SentimentDistribution;
 
 namespace Obratka.Modules.Analytics;
 
@@ -31,6 +32,7 @@ public static class DependencyInjection
                 options.UseNpgsql(cs));
             services.AddScoped<IReviewCountMetricService, ReviewCountMetricService>();
             services.AddScoped<IAverageRatingMetricService, AverageRatingMetricService>();
+            services.AddScoped<ISentimentDistributionMetricService, SentimentDistributionMetricService>();
         }
 
         return services;
