@@ -1,7 +1,9 @@
-import { useMemo } from 'react'
-import { Filter, RotateCcw } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { CalendarRange, ChevronDown, Filter, RotateCcw } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Calendar } from '@/components/ui/calendar'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { DashboardHeaderDto } from '@/api/dashboards'
 import { SOURCE_LABEL } from '@/pages/history/analysisStatus'
 import {
@@ -12,6 +14,7 @@ import {
   type Stars,
 } from '../DashboardFiltersContext'
 import { MultiSelectFilter, type MultiSelectOption } from './MultiSelectFilter'
+import { cn } from '@/lib/utils'
 
 const SOURCE_BADGE: Record<string, string> = {
   '2gis': 'bg-emerald-100 text-emerald-700',
@@ -138,58 +141,111 @@ export function DashboardFilters({ header }: { header: DashboardHeaderDto }) {
   )
 }
 
-// Период — нативный <input type="date"> + пресеты-кнопки. В будущем заменим
-// на react-day-picker, когда понадобится более богатый UX (пресеты, локаль и т.д.).
+// Период — единый trigger-popover с DayPicker в range-режиме и пресетами
+// слева. Пресеты — sliding windows от клиентского «сегодня» (юзер мыслит
+// «месяц от моего сегодня», бэк сравнивает с review_date по date-only).
 function DateRange() {
   const f = useDashboardFilters()
-  const fromValue = f.periodFrom ? f.periodFrom.slice(0, 10) : ''
-  const toValue = f.periodTo ? f.periodTo.slice(0, 10) : ''
+  const [open, setOpen] = useState(false)
 
-  // Пресеты: sliding windows от «сегодня» (клиентское время — для UX юзеру
-  // понятнее «месяц от моего сегодня», бэк всё равно сравнивает с review_date
-  // по дате без TZ-нюансов).
+  const fromDate = f.periodFrom ? new Date(f.periodFrom) : undefined
+  const toDate = f.periodTo ? new Date(f.periodTo) : undefined
+
+  const triggerLabel = useMemo(() => {
+    if (!f.periodFrom || !f.periodTo) return 'Выбрать период'
+    return `${formatDayMonth(f.periodFrom)} — ${formatDayMonth(f.periodTo)}`
+  }, [f.periodFrom, f.periodTo])
+
   const applyPreset = (daysBack: number) => {
     const today = new Date()
     const start = new Date(today)
     start.setDate(start.getDate() - daysBack + 1)
     f.setPeriod(toIsoDate(start), toIsoDate(today))
+    setOpen(false)
   }
 
   return (
     <div className="flex flex-col gap-1">
       <span className="text-text-tertiary text-xs uppercase tracking-wide px-1">Период</span>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <input
-          type="date"
-          value={fromValue}
-          max={toValue || undefined}
-          onChange={(e) => f.setPeriod(e.target.value || null, f.periodTo)}
-          className="h-9 px-2 rounded-lg border border-border-subtle bg-card text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-brand/30"
-        />
-        <span className="text-text-tertiary text-xs">→</span>
-        <input
-          type="date"
-          value={toValue}
-          min={fromValue || undefined}
-          onChange={(e) => f.setPeriod(f.periodFrom, e.target.value || null)}
-          className="h-9 px-2 rounded-lg border border-border-subtle bg-card text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-brand/30"
-        />
-        <div className="inline-flex items-center gap-0.5 rounded-lg bg-page-bg p-0.5 ml-1">
-          <PresetButton label="Неделя" onClick={() => applyPreset(7)} />
-          <PresetButton label="Месяц" onClick={() => applyPreset(30)} />
-          <PresetButton label="3 месяца" onClick={() => applyPreset(90)} />
-        </div>
-      </div>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className={cn(
+              'h-9 justify-between gap-2 font-normal min-w-[14rem]',
+              !f.periodFrom && 'text-text-tertiary',
+            )}
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <CalendarRange size={14} className="text-text-tertiary" />
+              {triggerLabel}
+            </span>
+            <ChevronDown size={14} className="text-text-tertiary shrink-0" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="p-0 w-auto" align="start">
+          <div className="flex">
+            {/* Левый столбец — пресеты */}
+            <div className="flex flex-col gap-0.5 p-3 border-r border-border-subtle min-w-[10rem]">
+              <div className="text-[11px] uppercase tracking-wide text-text-tertiary mb-1 px-2">
+                Быстрый выбор
+              </div>
+              <PresetButton label="Неделя" onClick={() => applyPreset(7)} />
+              <PresetButton label="Месяц" onClick={() => applyPreset(30)} />
+              <PresetButton label="3 месяца" onClick={() => applyPreset(90)} />
+              <div className="my-1 h-px bg-border-subtle" />
+              <PresetButton
+                label="Очистить"
+                onClick={() => {
+                  f.setPeriod(null, null)
+                  setOpen(false)
+                }}
+                muted
+              />
+            </div>
+            {/* Календарь справа */}
+            <div className="p-2">
+              <Calendar
+                mode="range"
+                selected={{ from: fromDate, to: toDate }}
+                onSelect={(range) => {
+                  f.setPeriod(
+                    range?.from ? toIsoDate(range.from) : null,
+                    range?.to ? toIsoDate(range.to) : null,
+                  )
+                }}
+                numberOfMonths={2}
+                defaultMonth={fromDate}
+              />
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
     </div>
   )
 }
 
-function PresetButton({ label, onClick }: { label: string; onClick: () => void }) {
+function PresetButton({
+  label,
+  onClick,
+  muted,
+}: {
+  label: string
+  onClick: () => void
+  muted?: boolean
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="px-2 py-1 rounded-md text-[11px] text-text-secondary hover:bg-card hover:text-text-primary hover:shadow-sm transition-all"
+      className={cn(
+        'px-2 py-1.5 rounded-md text-sm text-left transition-colors',
+        muted
+          ? 'text-text-tertiary hover:bg-page-bg hover:text-text-secondary'
+          : 'text-text-primary hover:bg-state-active-bg hover:text-brand',
+      )}
     >
       {label}
     </button>
@@ -201,4 +257,16 @@ function toIsoDate(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   return `${y}-${m}-${day}`
+}
+
+// Компактный формат для trigger-кнопки: «01 апр» (без года, чтобы влезало).
+// Год в trigger не нужен — диапазон обычно в текущем году; если фильтр
+// растянули на несколько лет — раскроет popover и юзер увидит точные даты.
+function formatDayMonth(iso: string): string {
+  try {
+    const d = new Date(iso)
+    return d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })
+  } catch {
+    return iso.slice(0, 10)
+  }
 }
