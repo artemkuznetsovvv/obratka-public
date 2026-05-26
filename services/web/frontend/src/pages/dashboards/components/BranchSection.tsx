@@ -56,8 +56,9 @@ export function BranchSection({ branch }: { branch: DashboardBranchDto }) {
         <MetricSentimentDistribution branchId={branch.branchId} />
       </div>
 
-      {/* Расширенный слой: 4, 5, 6, 7 */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+      {/* Расширенный слой: 4, 5, 6, 7. Сетка 2×2 — карточки шире, в М5
+          вмещаются полные названия тем без обрезания. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
         <MetricFreshPulse branchId={branch.branchId} />
         <MetricTopTopics branchId={branch.branchId} />
         <MetricCardPlaceholder slug="М6" title="Сколько клиентов рекомендуют" minHeight="14rem" />
