@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Obratka.Modules.Analytics.Metrics.AverageRating;
 using Obratka.Modules.Analytics.Metrics.FreshPulse;
+using Obratka.Modules.Analytics.Metrics.RecommendPercent;
 using Obratka.Modules.Analytics.Metrics.ReviewCount;
 using Obratka.Modules.Analytics.Metrics.SentimentDistribution;
 using Obratka.Modules.Analytics.Metrics.TopTopics;
@@ -26,7 +27,8 @@ public sealed class DashboardMetricsController(
     ISentimentDistributionMetricService? sentimentDistributionService = null,
     ISentimentReviewsService? sentimentReviewsService = null,
     IFreshPulseMetricService? freshPulseService = null,
-    ITopTopicsMetricService? topTopicsService = null) : ControllerBase
+    ITopTopicsMetricService? topTopicsService = null,
+    IRecommendPercentMetricService? recommendPercentService = null) : ControllerBase
 {
     // Метрика 1 «Количество отзывов» (per-branch) и О1 «Всего отзывов по сети»
     // (мульти-branch) — оба используют этот endpoint. Разница только в branchIds:
@@ -388,6 +390,61 @@ public sealed class DashboardMetricsController(
                 .Select(t => new TopicAggregateDto(t.Topic, t.ReviewCount, t.PositiveMentions, t.NegativeMentions))
                 .ToList(),
             TotalReviewsInPeriod: result.TotalReviewsInPeriod));
+    }
+
+    // Метрика 6 «Сколько клиентов рекомендуют» — доля overall_sentiment=
+    // позитивный от total non-empty за период. Параметры идентичны М1/М2:
+    // branch, period (current+previous той же длительности), sources, stars.
+    // Sentiments сюда НЕ принимаем — метрика буквально про долю одного значения.
+    [HttpGet("recommend-percent")]
+    [ProducesResponseType(typeof(RecommendPercentMetricDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<ActionResult<RecommendPercentMetricDto>> RecommendPercent(
+        Guid jobId,
+        [FromQuery] string? branchIds,
+        [FromQuery] DateTimeOffset? from,
+        [FromQuery] DateTimeOffset? to,
+        [FromQuery] string? sources,
+        [FromQuery] string? stars,
+        CancellationToken ct)
+    {
+        if (recommendPercentService is null)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "Analytics не сконфигурирован",
+                detail: "ConnectionStrings:ProcessingReadDb пустой — Analytics-модуль не подключён к processing_db.");
+        }
+
+        var branchList = ParseGuids(branchIds);
+        if (branchList is null || branchList.Count == 0)
+            return BadRequest(new { error = "branchIds is required (CSV of guids, at least one)" });
+
+        var ownerId = GetUserIdOrNull();
+        if (ownerId is null) return Unauthorized();
+
+        var job = await gateway.GetAnalysisAsync(jobId, ct);
+        if (job is null) return NotFound();
+        var owns = await db.Companies.AnyAsync(
+            c => c.Id == job.CompanyId && c.OwnerUserId == ownerId, ct);
+        if (!owns) return NotFound();
+
+        var result = await recommendPercentService.ComputeAsync(
+            new RecommendPercentMetricQuery(
+                JobId: jobId,
+                BranchIds: branchList,
+                From: from,
+                To: to,
+                Sources: ParseCsv(sources),
+                Stars: ParseStars(stars)),
+            ct);
+
+        return Ok(new RecommendPercentMetricDto(
+            Current: new RecommendPercentWindowDto(result.Current.Positive, result.Current.TotalNonEmpty),
+            Previous: new RecommendPercentWindowDto(result.Previous.Positive, result.Previous.TotalNonEmpty),
+            HasPreviousPeriod: result.HasPreviousPeriod));
     }
 
     private static IReadOnlyCollection<Guid>? ParseGuids(string? csv)

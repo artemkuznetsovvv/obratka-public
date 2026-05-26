@@ -8,6 +8,7 @@ import { MetricAverageRating } from '../cards/MetricAverageRating'
 import { MetricSentimentDistribution } from '../cards/MetricSentimentDistribution'
 import { MetricFreshPulse } from '../cards/MetricFreshPulse'
 import { MetricTopTopics } from '../cards/MetricTopTopics'
+import { MetricRecommendPercent } from '../cards/MetricRecommendPercent'
 
 // Секция одного филиала. По спеке:
 //   - Базовый слой: метрики 1, 2, 3 (горизонтальный ряд)
@@ -61,7 +62,7 @@ export function BranchSection({ branch }: { branch: DashboardBranchDto }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
         <MetricFreshPulse branchId={branch.branchId} />
         <MetricTopTopics branchId={branch.branchId} />
-        <MetricCardPlaceholder slug="М6" title="Сколько клиентов рекомендуют" minHeight="14rem" />
+        <MetricRecommendPercent branchId={branch.branchId} />
         <MetricCardPlaceholder slug="М7" title="Новые отзывы за период" hint="свой переключатель" minHeight="14rem" />
       </div>
 

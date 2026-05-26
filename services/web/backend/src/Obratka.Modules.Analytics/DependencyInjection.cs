@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Obratka.Modules.Analytics.Data;
 using Obratka.Modules.Analytics.Metrics.AverageRating;
 using Obratka.Modules.Analytics.Metrics.FreshPulse;
+using Obratka.Modules.Analytics.Metrics.RecommendPercent;
 using Obratka.Modules.Analytics.Metrics.ReviewCount;
 using Obratka.Modules.Analytics.Metrics.SentimentDistribution;
 using Obratka.Modules.Analytics.Metrics.TopTopics;
@@ -38,6 +39,7 @@ public static class DependencyInjection
             services.AddScoped<ISentimentReviewsService, SentimentReviewsService>();
             services.AddScoped<IFreshPulseMetricService, FreshPulseMetricService>();
             services.AddScoped<ITopTopicsMetricService, TopTopicsMetricService>();
+            services.AddScoped<IRecommendPercentMetricService, RecommendPercentMetricService>();
         }
 
         return services;

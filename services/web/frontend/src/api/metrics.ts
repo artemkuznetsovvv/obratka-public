@@ -129,6 +129,22 @@ export interface TopTopicsMetricDto {
 // сама показывает разрез по тональности).
 export type TopTopicsQuery = SentimentDistributionQuery
 
+// Метрика 6 «Сколько клиентов рекомендуют». Counts → фронт считает %.
+// hasPreviousPeriod=false когда фильтр периода не задан полностью.
+export interface RecommendPercentWindowDto {
+  positive: number
+  totalNonEmpty: number
+}
+
+export interface RecommendPercentMetricDto {
+  current: RecommendPercentWindowDto
+  previous: RecommendPercentWindowDto
+  hasPreviousPeriod: boolean
+}
+
+// М6: те же параметры что М5 (без sentiments).
+export type RecommendPercentQuery = SentimentDistributionQuery
+
 export const metricsApi = {
   reviewCount: (jobId: string, q: ReviewCountQuery) =>
     http
@@ -157,6 +173,14 @@ export const metricsApi = {
       .get<TopTopicsMetricDto>(`/api/analyses/${jobId}/metrics/top-topics`, {
         params: buildSentimentParams(q),
       })
+      .then((r) => r.data),
+
+  recommendPercent: (jobId: string, q: RecommendPercentQuery) =>
+    http
+      .get<RecommendPercentMetricDto>(
+        `/api/analyses/${jobId}/metrics/recommend-percent`,
+        { params: buildSentimentParams(q) },
+      )
       .then((r) => r.data),
 
   freshPulse: (jobId: string, q: FreshPulseQuery) =>
