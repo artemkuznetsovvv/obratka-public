@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Obratka.Modules.Analytics.Data.Entities;
 
@@ -64,12 +65,28 @@ public sealed class ProcessingReadContext(DbContextOptions<ProcessingReadContext
             e.Property(r => r.Title).HasColumnName("title");
             e.Property(r => r.Body).HasColumnName("body");
             e.Property(r => r.ExpectedImpact).HasColumnName("expected_impact");
-            // evidence — jsonb array of strings. Npgsql.EFCore маппит List<string>
-            // на jsonb через HasColumnType, без явных конвертеров.
-            e.Property(r => r.Evidence).HasColumnName("evidence").HasColumnType("jsonb");
+            // evidence — jsonb array of strings. В Npgsql 8+ нативный маппинг
+            // List<string> ↔ jsonb требует EnableDynamicJson на DataSource —
+            // это глобальный opt-in для всех типов, не хотим. Вместо этого
+            // явная конверсия через System.Text.Json: при чтении парсим строку,
+            // при записи сериализуем. Сериализация фактически не нужна
+            // (контекст read-only), но HasConversion требует обе стороны.
+            e.Property(r => r.Evidence)
+                .HasColumnName("evidence")
+                .HasColumnType("jsonb")
+                .HasConversion(
+                    v => JsonSerializer.Serialize(v, JsonOptions),
+                    v => string.IsNullOrEmpty(v)
+                        ? new List<string>()
+                        : JsonSerializer.Deserialize<List<string>>(v, JsonOptions) ?? new List<string>());
             e.Property(r => r.SortOrder).HasColumnName("sort_order");
         });
     }
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
 
     public override int SaveChanges()
         => throw new InvalidOperationException(
