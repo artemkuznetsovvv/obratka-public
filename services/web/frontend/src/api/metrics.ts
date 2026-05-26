@@ -111,6 +111,24 @@ export interface FreshPulseQuery {
   stars: number[]
 }
 
+// Метрика 5 «О чём говорят чаще всего» — топ-3 темы.
+// totalReviewsInPeriod нужен фронту для расчёта доли темы (reviewCount / total).
+export interface TopicAggregateDto {
+  topic: string
+  reviewCount: number
+  positiveMentions: number
+  negativeMentions: number
+}
+
+export interface TopTopicsMetricDto {
+  topics: TopicAggregateDto[]
+  totalReviewsInPeriod: number
+}
+
+// М5: branch + period + sources + stars (sentiments не передаётся — карточка
+// сама показывает разрез по тональности).
+export type TopTopicsQuery = SentimentDistributionQuery
+
 export const metricsApi = {
   reviewCount: (jobId: string, q: ReviewCountQuery) =>
     http
@@ -132,6 +150,13 @@ export const metricsApi = {
         `/api/analyses/${jobId}/metrics/sentiment-distribution`,
         { params: buildSentimentParams(q) },
       )
+      .then((r) => r.data),
+
+  topTopics: (jobId: string, q: TopTopicsQuery) =>
+    http
+      .get<TopTopicsMetricDto>(`/api/analyses/${jobId}/metrics/top-topics`, {
+        params: buildSentimentParams(q),
+      })
       .then((r) => r.data),
 
   freshPulse: (jobId: string, q: FreshPulseQuery) =>

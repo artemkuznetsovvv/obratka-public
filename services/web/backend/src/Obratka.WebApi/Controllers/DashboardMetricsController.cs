@@ -6,6 +6,7 @@ using Obratka.Modules.Analytics.Metrics.AverageRating;
 using Obratka.Modules.Analytics.Metrics.FreshPulse;
 using Obratka.Modules.Analytics.Metrics.ReviewCount;
 using Obratka.Modules.Analytics.Metrics.SentimentDistribution;
+using Obratka.Modules.Analytics.Metrics.TopTopics;
 using Obratka.WebApi.Auth;
 using Obratka.WebApi.Contracts.Dashboards;
 using Obratka.WebApi.Data;
@@ -24,7 +25,8 @@ public sealed class DashboardMetricsController(
     IAverageRatingMetricService? averageRatingService = null,
     ISentimentDistributionMetricService? sentimentDistributionService = null,
     ISentimentReviewsService? sentimentReviewsService = null,
-    IFreshPulseMetricService? freshPulseService = null) : ControllerBase
+    IFreshPulseMetricService? freshPulseService = null,
+    ITopTopicsMetricService? topTopicsService = null) : ControllerBase
 {
     // Метрика 1 «Количество отзывов» (per-branch) и О1 «Всего отзывов по сети»
     // (мульти-branch) — оба используют этот endpoint. Разница только в branchIds:
@@ -331,6 +333,61 @@ public sealed class DashboardMetricsController(
         static FreshPulseWindowDto ToWindowDto(FreshPulseWindowResult w) => new(
             w.Index, w.Positive, w.Neutral, w.Negative,
             w.TotalNonEmpty, w.FromInclusive, w.ToExclusive);
+    }
+
+    // Метрика 5 «О чём говорят чаще всего» — топ-3 темы по числу отзывов.
+    // Sentiments сюда НЕ принимаем (метрика про разрез pos/neg внутри тем).
+    // Применяются: branch, period, sources, stars.
+    [HttpGet("top-topics")]
+    [ProducesResponseType(typeof(TopTopicsMetricDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<ActionResult<TopTopicsMetricDto>> TopTopics(
+        Guid jobId,
+        [FromQuery] string? branchIds,
+        [FromQuery] DateTimeOffset? from,
+        [FromQuery] DateTimeOffset? to,
+        [FromQuery] string? sources,
+        [FromQuery] string? stars,
+        CancellationToken ct)
+    {
+        if (topTopicsService is null)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "Analytics не сконфигурирован",
+                detail: "ConnectionStrings:ProcessingReadDb пустой — Analytics-модуль не подключён к processing_db.");
+        }
+
+        var branchList = ParseGuids(branchIds);
+        if (branchList is null || branchList.Count == 0)
+            return BadRequest(new { error = "branchIds is required (CSV of guids, at least one)" });
+
+        var ownerId = GetUserIdOrNull();
+        if (ownerId is null) return Unauthorized();
+
+        var job = await gateway.GetAnalysisAsync(jobId, ct);
+        if (job is null) return NotFound();
+        var owns = await db.Companies.AnyAsync(
+            c => c.Id == job.CompanyId && c.OwnerUserId == ownerId, ct);
+        if (!owns) return NotFound();
+
+        var result = await topTopicsService.ComputeAsync(
+            new TopTopicsMetricQuery(
+                JobId: jobId,
+                BranchIds: branchList,
+                From: from,
+                To: to,
+                Sources: ParseCsv(sources),
+                Stars: ParseStars(stars)),
+            ct);
+
+        return Ok(new TopTopicsMetricDto(
+            Topics: result.Topics
+                .Select(t => new TopicAggregateDto(t.Topic, t.ReviewCount, t.PositiveMentions, t.NegativeMentions))
+                .ToList(),
+            TotalReviewsInPeriod: result.TotalReviewsInPeriod));
     }
 
     private static IReadOnlyCollection<Guid>? ParseGuids(string? csv)
