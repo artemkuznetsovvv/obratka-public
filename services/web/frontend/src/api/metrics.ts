@@ -87,6 +87,30 @@ export interface SentimentReviewsQuery extends SentimentDistributionQuery {
   offset?: number
 }
 
+// Метрика 4 «Свежий пульс». Окно жёстко 30 дней — period на UI не выбирается.
+// index ∈ [-100, +100] либо null если нет отзывов в окне.
+export interface FreshPulseWindowDto {
+  index: number | null
+  positive: number
+  neutral: number
+  negative: number
+  totalNonEmpty: number
+  fromInclusive: string
+  toExclusive: string
+}
+
+export interface FreshPulseMetricDto {
+  current: FreshPulseWindowDto
+  previous: FreshPulseWindowDto
+}
+
+// М4 принимает branch+sources+stars; sentiments и period НЕ передаются.
+export interface FreshPulseQuery {
+  branchIds: string[]
+  sources: string[]
+  stars: number[]
+}
+
 export const metricsApi = {
   reviewCount: (jobId: string, q: ReviewCountQuery) =>
     http
@@ -108,6 +132,19 @@ export const metricsApi = {
         `/api/analyses/${jobId}/metrics/sentiment-distribution`,
         { params: buildSentimentParams(q) },
       )
+      .then((r) => r.data),
+
+  freshPulse: (jobId: string, q: FreshPulseQuery) =>
+    http
+      .get<FreshPulseMetricDto>(`/api/analyses/${jobId}/metrics/fresh-pulse`, {
+        params: {
+          branchIds: q.branchIds.join(','),
+          sources: shouldSendFilter(q.sources, 3) ? q.sources.join(',') : undefined,
+          stars: shouldSendFilter(q.stars, ALL_STARS.length)
+            ? q.stars.join(',')
+            : undefined,
+        },
+      })
       .then((r) => r.data),
 
   sentimentReviews: (jobId: string, q: SentimentReviewsQuery) =>

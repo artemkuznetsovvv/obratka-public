@@ -6,6 +6,7 @@ import { MetricCardPlaceholder } from './MetricCardPlaceholder'
 import { MetricReviewCount } from '../cards/MetricReviewCount'
 import { MetricAverageRating } from '../cards/MetricAverageRating'
 import { MetricSentimentDistribution } from '../cards/MetricSentimentDistribution'
+import { MetricFreshPulse } from '../cards/MetricFreshPulse'
 
 // Секция одного филиала. По спеке:
 //   - Базовый слой: метрики 1, 2, 3 (горизонтальный ряд)
@@ -56,10 +57,10 @@ export function BranchSection({ branch }: { branch: DashboardBranchDto }) {
 
       {/* Расширенный слой: 4, 5, 6, 7 */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-        <MetricCardPlaceholder slug="М4" title="Свежий пульс" hint="окно 30 дней" minHeight="9rem" />
-        <MetricCardPlaceholder slug="М5" title="О чём говорят чаще всего" minHeight="9rem" />
-        <MetricCardPlaceholder slug="М6" title="Сколько клиентов рекомендуют" minHeight="9rem" />
-        <MetricCardPlaceholder slug="М7" title="Новые отзывы за период" hint="свой переключатель" minHeight="9rem" />
+        <MetricFreshPulse branchId={branch.branchId} />
+        <MetricCardPlaceholder slug="М5" title="О чём говорят чаще всего" minHeight="14rem" />
+        <MetricCardPlaceholder slug="М6" title="Сколько клиентов рекомендуют" minHeight="14rem" />
+        <MetricCardPlaceholder slug="М7" title="Новые отзывы за период" hint="свой переключатель" minHeight="14rem" />
       </div>
 
       {/* Опц. блок «Топ примеров» (ТЗ 4.3) — пока placeholder, MVP включит позже */}
