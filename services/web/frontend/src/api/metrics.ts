@@ -145,6 +145,31 @@ export interface RecommendPercentMetricDto {
 // М6: те же параметры что М5 (без sentiments).
 export type RecommendPercentQuery = SentimentDistributionQuery
 
+// Метрика 7 «Новые отзывы за период». Counts current+3 prev окон того же
+// размера + fullPreviousWindows ∈ {0..3} — индикатор «есть ли история».
+// Фронт сам решает режим (полный vs облегчённый) по правилу fullPrev ≥ 2.
+export type RecentReviewsWindow = '7d' | '30d' | '3m' | '6m' | '12m'
+
+export interface RecentReviewsMetricDto {
+  window: string
+  currentCount: number
+  prev1Count: number      // самое свежее prev-окно (right next to current)
+  prev2Count: number
+  prev3Count: number      // самое старое prev-окно
+  fullPreviousWindows: number
+  currentFromInclusive: string
+  currentToExclusive: string
+}
+
+// М7: window выбирается переключателем на самой карточке (НЕ из контекста).
+// period и sentiments НЕ передаются.
+export interface RecentReviewsQuery {
+  branchIds: string[]
+  window: RecentReviewsWindow
+  sources: string[]
+  stars: number[]
+}
+
 export const metricsApi = {
   reviewCount: (jobId: string, q: ReviewCountQuery) =>
     http
@@ -172,6 +197,20 @@ export const metricsApi = {
     http
       .get<TopTopicsMetricDto>(`/api/analyses/${jobId}/metrics/top-topics`, {
         params: buildSentimentParams(q),
+      })
+      .then((r) => r.data),
+
+  recentReviews: (jobId: string, q: RecentReviewsQuery) =>
+    http
+      .get<RecentReviewsMetricDto>(`/api/analyses/${jobId}/metrics/recent-reviews`, {
+        params: {
+          branchIds: q.branchIds.join(','),
+          window: q.window,
+          sources: shouldSendFilter(q.sources, 3) ? q.sources.join(',') : undefined,
+          stars: shouldSendFilter(q.stars, ALL_STARS.length)
+            ? q.stars.join(',')
+            : undefined,
+        },
       })
       .then((r) => r.data),
 

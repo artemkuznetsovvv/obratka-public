@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Obratka.Modules.Analytics.Metrics.AverageRating;
 using Obratka.Modules.Analytics.Metrics.FreshPulse;
+using Obratka.Modules.Analytics.Metrics.RecentReviews;
 using Obratka.Modules.Analytics.Metrics.RecommendPercent;
 using Obratka.Modules.Analytics.Metrics.ReviewCount;
 using Obratka.Modules.Analytics.Metrics.SentimentDistribution;
@@ -28,7 +29,8 @@ public sealed class DashboardMetricsController(
     ISentimentReviewsService? sentimentReviewsService = null,
     IFreshPulseMetricService? freshPulseService = null,
     ITopTopicsMetricService? topTopicsService = null,
-    IRecommendPercentMetricService? recommendPercentService = null) : ControllerBase
+    IRecommendPercentMetricService? recommendPercentService = null,
+    IRecentReviewsMetricService? recentReviewsService = null) : ControllerBase
 {
     // Метрика 1 «Количество отзывов» (per-branch) и О1 «Всего отзывов по сети»
     // (мульти-branch) — оба используют этот endpoint. Разница только в branchIds:
@@ -445,6 +447,83 @@ public sealed class DashboardMetricsController(
             Current: new RecommendPercentWindowDto(result.Current.Positive, result.Current.TotalNonEmpty),
             Previous: new RecommendPercentWindowDto(result.Previous.Positive, result.Previous.TotalNonEmpty),
             HasPreviousPeriod: result.HasPreviousPeriod));
+    }
+
+    // Метрика 7 «Новые отзывы за период». Окно выбирается параметром window;
+    // period дашборда сюда НЕ принимаем (окно у карточки своё). Sentiments
+    // тоже не принимаем (метрика чисто количественная).
+    // Принимает: branchIds, window, sources, stars.
+    [HttpGet("recent-reviews")]
+    [ProducesResponseType(typeof(RecentReviewsMetricDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<ActionResult<RecentReviewsMetricDto>> RecentReviews(
+        Guid jobId,
+        [FromQuery] string? branchIds,
+        [FromQuery] string? window,
+        [FromQuery] string? sources,
+        [FromQuery] string? stars,
+        CancellationToken ct)
+    {
+        if (recentReviewsService is null)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "Analytics не сконфигурирован",
+                detail: "ConnectionStrings:ProcessingReadDb пустой — Analytics-модуль не подключён к processing_db.");
+        }
+
+        var branchList = ParseGuids(branchIds);
+        if (branchList is null || branchList.Count == 0)
+            return BadRequest(new { error = "branchIds is required (CSV of guids, at least one)" });
+
+        if (!TryParseWindow(window, out var windowEnum))
+            return BadRequest(new { error = "window must be one of: 7d, 30d, 3m, 6m, 12m" });
+
+        var ownerId = GetUserIdOrNull();
+        if (ownerId is null) return Unauthorized();
+
+        var job = await gateway.GetAnalysisAsync(jobId, ct);
+        if (job is null) return NotFound();
+        var owns = await db.Companies.AnyAsync(
+            c => c.Id == job.CompanyId && c.OwnerUserId == ownerId, ct);
+        if (!owns) return NotFound();
+
+        var result = await recentReviewsService.ComputeAsync(
+            new RecentReviewsMetricQuery(
+                JobId: jobId,
+                BranchIds: branchList,
+                Window: windowEnum,
+                Sources: ParseCsv(sources),
+                Stars: ParseStars(stars)),
+            ct);
+
+        return Ok(new RecentReviewsMetricDto(
+            Window: result.Window,
+            CurrentCount: result.CurrentCount,
+            Prev1Count: result.Prev1Count,
+            Prev2Count: result.Prev2Count,
+            Prev3Count: result.Prev3Count,
+            FullPreviousWindows: result.FullPreviousWindows,
+            CurrentFromInclusive: result.CurrentFromInclusive,
+            CurrentToExclusive: result.CurrentToExclusive));
+    }
+
+    // Параметр window — стабильный slug в API («7d», «30d», «3m», «6m», «12m»).
+    // Дефолт 7d (по спеке М7).
+    private static bool TryParseWindow(string? raw, out RecentReviewsWindow window)
+    {
+        window = (raw ?? "7d").Trim().ToLowerInvariant() switch
+        {
+            "7d"  => RecentReviewsWindow.Days7,
+            "30d" => RecentReviewsWindow.Days30,
+            "3m"  => RecentReviewsWindow.Months3,
+            "6m"  => RecentReviewsWindow.Months6,
+            "12m" => RecentReviewsWindow.Months12,
+            _ => (RecentReviewsWindow)(-1),
+        };
+        return Enum.IsDefined(window);
     }
 
     private static IReadOnlyCollection<Guid>? ParseGuids(string? csv)

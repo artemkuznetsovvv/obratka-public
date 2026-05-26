@@ -2,13 +2,13 @@ import { MapPin } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import type { DashboardBranchDto } from '@/api/dashboards'
 import { useDashboardFilters } from '../DashboardFiltersContext'
-import { MetricCardPlaceholder } from './MetricCardPlaceholder'
 import { MetricReviewCount } from '../cards/MetricReviewCount'
 import { MetricAverageRating } from '../cards/MetricAverageRating'
 import { MetricSentimentDistribution } from '../cards/MetricSentimentDistribution'
 import { MetricFreshPulse } from '../cards/MetricFreshPulse'
 import { MetricTopTopics } from '../cards/MetricTopTopics'
 import { MetricRecommendPercent } from '../cards/MetricRecommendPercent'
+import { MetricRecentReviews } from '../cards/MetricRecentReviews'
 
 // Секция одного филиала. По спеке:
 //   - Базовый слой: метрики 1, 2, 3 (горизонтальный ряд)
@@ -63,7 +63,7 @@ export function BranchSection({ branch }: { branch: DashboardBranchDto }) {
         <MetricFreshPulse branchId={branch.branchId} />
         <MetricTopTopics branchId={branch.branchId} />
         <MetricRecommendPercent branchId={branch.branchId} />
-        <MetricCardPlaceholder slug="М7" title="Новые отзывы за период" hint="свой переключатель" minHeight="14rem" />
+        <MetricRecentReviews branchId={branch.branchId} />
       </div>
 
       {/* Опц. блок «Топ примеров» (ТЗ 4.3) — пока placeholder, MVP включит позже */}
