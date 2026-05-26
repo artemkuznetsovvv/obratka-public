@@ -102,12 +102,17 @@ export function DashboardFilters({ header }: { header: DashboardHeaderDto }) {
           selected={filters.sources}
           onChange={filters.setSources}
         />
-        <MultiSelectFilter
-          label="Филиал"
-          options={branchOptions}
-          selected={filters.branches}
-          onChange={filters.setBranches}
-        />
+        {/* Фильтр «Филиал» бесполезен когда филиал один — скрываем. Карточки
+            всё равно получают branchId напрямую из секции; filters.branches в
+            Context остаётся валидным single-item массивом. */}
+        {header.branches.length > 1 && (
+          <MultiSelectFilter
+            label="Филиал"
+            options={branchOptions}
+            selected={filters.branches}
+            onChange={filters.setBranches}
+          />
+        )}
         <MultiSelectFilter
           label="Тема"
           options={[]}

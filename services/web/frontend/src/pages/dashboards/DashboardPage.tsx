@@ -137,7 +137,9 @@ function DashboardHeader({ data }: { data: DashboardHeaderDto }) {
         </div>
       )}
 
-      <BranchesCollapsible branches={data.branches} />
+      {/* При 1 филиале collapsible бесполезен — имя филиала и так показано
+          в заголовке секции BranchSection. Показываем только при 2+. */}
+      {data.branches.length > 1 && <BranchesCollapsible branches={data.branches} />}
     </Card>
   )
 }
