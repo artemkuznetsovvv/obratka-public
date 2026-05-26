@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Obratka.Modules.Analytics.Recommendations;
 using Obratka.WebApi.Auth;
 using Obratka.WebApi.Contracts.Analyses;
 using Obratka.WebApi.Contracts.Dashboards;
@@ -18,7 +19,8 @@ public sealed class AnalysesController(
     WebApiDbContext db,
     IProcessingGatewayClient gateway,
     UserManager<ApplicationUser> userManager,
-    ILogger<AnalysesController> logger) : ControllerBase
+    ILogger<AnalysesController> logger,
+    IRecommendationsService? recommendationsService = null) : ControllerBase
 {
     // Запуск анализа из мастера (step 3 "Запустить"). Web API сам разбирает группировку
     // из БД и формирует payload для PG, проставляя BranchId=LogicalBranch.Id (физический
@@ -305,6 +307,41 @@ public sealed class AnalysesController(
             CompletedAt: job.CompletedAt,
             PeriodFrom: company.DraftPeriodFrom,
             PeriodTo: company.DraftPeriodTo));
+    }
+
+    // Список LLM-рекомендаций по результатам анализа. Сортировка sort_order ASC.
+    // Если Analytics-модуль не сконфигурирован (пустой ProcessingReadDb cs) —
+    // вернёт 503; для UI это значит «не показывать блок».
+    [HttpGet("{jobId:guid}/recommendations")]
+    [ProducesResponseType(typeof(RecommendationListDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<ActionResult<RecommendationListDto>> Recommendations(
+        Guid jobId, CancellationToken ct)
+    {
+        if (recommendationsService is null)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "Analytics не сконфигурирован",
+                detail: "ConnectionStrings:ProcessingReadDb пустой — рекомендации недоступны.");
+        }
+
+        var ownerId = GetUserIdOrNull();
+        if (ownerId is null) return Unauthorized();
+
+        var job = await gateway.GetAnalysisAsync(jobId, ct);
+        if (job is null) return NotFound();
+        var owns = await db.Companies.AnyAsync(
+            c => c.Id == job.CompanyId && c.OwnerUserId == ownerId, ct);
+        if (!owns) return NotFound();
+
+        var rows = await recommendationsService.ListByJobAsync(jobId, ct);
+        var items = rows
+            .Select(r => new RecommendationDto(
+                r.Id, r.Priority, r.Topic, r.Title, r.Body, r.ExpectedImpact, r.Evidence))
+            .ToList();
+        return Ok(new RecommendationListDto(items));
     }
 
     private Guid? GetUserIdOrNull()

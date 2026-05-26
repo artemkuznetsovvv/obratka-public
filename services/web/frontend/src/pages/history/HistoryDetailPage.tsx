@@ -40,6 +40,7 @@ import {
   type PipelineStage,
   type StepperStep,
 } from './analysisStatus'
+import { RecommendationsBlock } from './RecommendationsBlock'
 
 const SOURCE_BADGE: Record<string, string> = {
   '2gis': 'bg-emerald-100 text-emerald-700',
@@ -237,12 +238,13 @@ export default function HistoryDetailPage() {
                   </div>
                 )}
 
+                <div className="mb-4">
+                  <RecommendationsBlock jobId={job.id} />
+                </div>
+
                 <BranchStatsBlock jobId={job.id} companyId={job.companyId} />
 
-                <div className="mt-5 flex items-center justify-between gap-3 flex-wrap">
-                  <div className="text-xs text-text-tertiary">
-                    Список рекомендаций — в следующих обновлениях.
-                  </div>
+                <div className="mt-5 flex items-center justify-end gap-3 flex-wrap">
                   <Button
                     size="sm"
                     onClick={() => navigate(`/history/${job.id}/dashboard`)}

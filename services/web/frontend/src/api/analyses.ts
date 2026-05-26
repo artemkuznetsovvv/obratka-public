@@ -22,6 +22,22 @@ export interface BranchStatsDto {
   reviewCount: number
 }
 
+// LLM-рекомендации по результатам анализа. Сортировка sort_order ASC.
+// priority: 1=высокий / 2=средний / 3=низкий.
+export interface RecommendationDto {
+  id: number
+  priority: number
+  topic: string
+  title: string
+  body: string
+  expectedImpact: string | null
+  evidence: string[]
+}
+
+export interface RecommendationListDto {
+  items: RecommendationDto[]
+}
+
 export const analysesApi = {
   start: (request: StartAnalysisRequest) =>
     http.post<StartAnalysisResponse>('/api/analyses/start', request).then((r) => r.data),
@@ -34,4 +50,9 @@ export const analysesApi = {
 
   branchStats: (jobId: string) =>
     http.get<BranchStatsDto[]>(`/api/analyses/${jobId}/branch-stats`).then((r) => r.data),
+
+  recommendations: (jobId: string) =>
+    http
+      .get<RecommendationListDto>(`/api/analyses/${jobId}/recommendations`)
+      .then((r) => r.data),
 }

@@ -17,6 +17,7 @@ public sealed class ProcessingReadContext(DbContextOptions<ProcessingReadContext
     public DbSet<Review> Reviews => Set<Review>();
     public DbSet<ReviewLlmResult> ReviewLlmResults => Set<ReviewLlmResult>();
     public DbSet<AnalysisJobReview> AnalysisJobReviews => Set<AnalysisJobReview>();
+    public DbSet<AnalysisRecommendation> AnalysisRecommendations => Set<AnalysisRecommendation>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -50,6 +51,23 @@ public sealed class ProcessingReadContext(DbContextOptions<ProcessingReadContext
             e.HasKey(r => new { r.AnalysisJobId, r.ReviewId });
             e.Property(r => r.AnalysisJobId).HasColumnName("analysis_job_id");
             e.Property(r => r.ReviewId).HasColumnName("review_id");
+        });
+
+        modelBuilder.Entity<AnalysisRecommendation>(e =>
+        {
+            e.ToTable("analysis_recommendations", "public");
+            e.HasKey(r => r.Id);
+            e.Property(r => r.Id).HasColumnName("id");
+            e.Property(r => r.AnalysisJobId).HasColumnName("analysis_job_id");
+            e.Property(r => r.Priority).HasColumnName("priority");
+            e.Property(r => r.Topic).HasColumnName("topic");
+            e.Property(r => r.Title).HasColumnName("title");
+            e.Property(r => r.Body).HasColumnName("body");
+            e.Property(r => r.ExpectedImpact).HasColumnName("expected_impact");
+            // evidence — jsonb array of strings. Npgsql.EFCore маппит List<string>
+            // на jsonb через HasColumnType, без явных конвертеров.
+            e.Property(r => r.Evidence).HasColumnName("evidence").HasColumnType("jsonb");
+            e.Property(r => r.SortOrder).HasColumnName("sort_order");
         });
     }
 
