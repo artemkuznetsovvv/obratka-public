@@ -4,9 +4,11 @@ import { ru } from 'date-fns/locale'
 import { cn } from '@/lib/utils'
 import 'react-day-picker/dist/style.css'
 
-// Кастомизация DayPicker под нашу палитру (brand, page-bg, text-text-primary).
-// Локаль ru. Используется в фильтре периода дашборда, при необходимости —
-// в других местах через ту же обёртку.
+// Кастомизация DayPicker (v10) под нашу палитру (brand, page-bg,
+// text-text-primary). Локаль ru. Используется в фильтре периода дашборда.
+// Структура classNames следует shadcn-паттерну для RDP 9/10: кнопки
+// previous/next позиционированы absolute внутри month_caption, без
+// конкуренции с caption_label.
 export function Calendar({
   className,
   classNames,
@@ -19,18 +21,21 @@ export function Calendar({
       showOutsideDays={showOutsideDays}
       className={cn('p-1', className)}
       classNames={{
-        months: 'flex flex-col sm:flex-row gap-4',
+        months: 'flex flex-col sm:flex-row gap-4 relative',
         month: 'space-y-3',
-        month_caption: 'flex items-center justify-center pt-1 relative text-sm font-medium',
+        month_caption:
+          'flex justify-center pt-1 relative items-center h-8 text-sm font-medium',
         caption_label: 'text-sm font-medium capitalize',
-        nav: 'flex items-center justify-between absolute inset-x-1 top-1',
+        nav: 'absolute inset-x-0 top-1 flex items-center justify-between px-1 pointer-events-none',
         button_previous: cn(
           'h-7 w-7 inline-flex items-center justify-center rounded-md',
           'text-text-secondary hover:bg-page-bg hover:text-text-primary transition-colors',
+          'pointer-events-auto',
         ),
         button_next: cn(
           'h-7 w-7 inline-flex items-center justify-center rounded-md',
           'text-text-secondary hover:bg-page-bg hover:text-text-primary transition-colors',
+          'pointer-events-auto',
         ),
         month_grid: 'w-full border-collapse',
         weekdays: 'flex',
