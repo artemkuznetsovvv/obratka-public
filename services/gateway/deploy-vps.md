@@ -186,7 +186,7 @@ services:
       # Parser в той же сети — резолвится по docker DNS.
       Parser__BaseUrl: "http://parser:8080"
       Parser__PollIntervalSeconds: "4"
-      Parser__TaskTimeoutMinutes: "30"
+      Parser__TaskTimeoutMinutes: "120"
 
       # MinIO Parser-стэка — внутренний http (TLS терминирует nginx внешним).
       S3__Endpoint: "http://minio:9000"
