@@ -378,12 +378,16 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
                 const seen = new Set();
                 const links = document.querySelectorAll('a[href*="/firm/"]');
 
-                const cleanAddress = (s) => {
-                    if (!s) return '';
-                    // Удаляем zero-width chars и обрезаем хвост "N филиалов/филиал/филиала"
-                    let t = s.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
-                    t = t.replace(/\s*\d+\s+филиал\w*\s*$/i, '').trim();
-                    return t;
+                // DOM-чистка адреса от бейджа "N филиалов".
+                // 2GIS рендерит этот бейдж как <a href="/<city>/branches/<brandId>">N филиалов</a>
+                // ВНУТРИ того же div'а с адресом, поэтому innerText захватывает и адрес, и бейдж.
+                // Решение: клонируем child, удаляем все <a href*="/branches/">, читаем textContent.
+                // Второй рубеж (zero-width chars + regex fallback) — в C# TwoGisAddressSanitizer.Clean,
+                // на случай если 2GIS поменяет href/класс/структуру.
+                const cleanAddressFromDom = (el) => {
+                    const clone = el.cloneNode(true);
+                    clone.querySelectorAll('a[href*="/branches/"]').forEach(a => a.remove());
+                    return (clone.textContent || '').trim();
                 };
 
                 for (const link of links) {
@@ -422,7 +426,7 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
 
                         // Адрес: содержит запятую, не часы/статус
                         if (!address && t.includes(',') && !/^закрыт|^открыт|\d{1,2}:\d{2}/i.test(t)) {
-                            address = cleanAddress(t);
+                            address = cleanAddressFromDom(ch);
                         }
                     }
 
@@ -449,7 +453,7 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
             ExternalId: r.FirmId ?? "",
             ExternalUrl: r.Url ?? "",
             Name: r.Name ?? "",
-            Address: r.Address ?? "",
+            Address: TwoGisAddressSanitizer.Clean(r.Address),
             Rating: r.Rating,
             ReviewCount: r.ReviewCount
         )).ToList();
