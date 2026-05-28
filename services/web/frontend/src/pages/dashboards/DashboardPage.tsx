@@ -179,14 +179,18 @@ function BranchesCollapsible({
               key={b.branchId}
               className="rounded-xl border border-border-subtle bg-card/40 px-4 py-3"
             >
-              <div className="text-sm font-medium text-text-primary">
-                {b.name ?? <span className="italic text-text-tertiary">Филиал удалён</span>}
+              {/* Адрес — главный идентификатор (см. cc6f441 / 18429ea):
+                  у сетевых брендов имя одинаковое у всех филиалов. */}
+              <div className="text-sm font-medium text-text-primary flex items-center gap-1">
+                <MapPin size={12} className="text-text-tertiary shrink-0" />
+                <span className="truncate">
+                  {b.address ?? (
+                    b.name ?? <span className="italic text-text-tertiary">Филиал удалён</span>
+                  )}
+                </span>
               </div>
-              {b.address && (
-                <div className="text-xs text-text-tertiary mt-0.5 flex items-center gap-1">
-                  <MapPin size={11} />
-                  {b.address}
-                </div>
+              {b.address && b.name && (
+                <div className="text-xs text-text-tertiary mt-0.5 truncate">{b.name}</div>
               )}
             </li>
           ))}
