@@ -743,12 +743,17 @@ function ParamsBranchRow({ group }: { group: LogicalBranchDto }) {
   const activeProviders = group.providers.filter((p) => p.isEnabled)
   return (
     <li className="rounded-xl border border-border-subtle bg-card/40 px-4 py-3">
-      <div className="text-sm font-medium text-text-primary">{group.name || 'Без названия'}</div>
-      {group.address && (
-        <div className="text-xs text-text-tertiary mt-0.5 flex items-center gap-1">
-          <MapPin size={11} />
-          {group.address}
-        </div>
+      {/* Иерархия перевёрнута: адрес сверху крупно, имя мельче под ним.
+          У сетевых брендов имя одинаковое у всех филиалов — различить
+          можно только адресом (тот же приём что в BranchSearchPage). */}
+      <div className="text-sm font-medium text-text-primary flex items-center gap-1">
+        <MapPin size={12} className="text-text-tertiary shrink-0" />
+        <span className="truncate">
+          {group.address || <span className="italic text-text-tertiary">Адрес не указан</span>}
+        </span>
+      </div>
+      {group.name && (
+        <div className="text-xs text-text-tertiary mt-0.5 truncate">{group.name}</div>
       )}
       <div className="mt-2 flex flex-wrap gap-1.5">
         {activeProviders.map((p) => {
@@ -812,11 +817,14 @@ function BranchStatsBlock({ jobId, companyId }: { jobId: string; companyId: stri
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
+                {/* Адрес — главный идентификатор (см. ParamsBranchRow выше) */}
                 <div className="text-sm font-medium text-text-primary truncate">
-                  {b.branchName ?? <span className="italic text-text-tertiary">Филиал удалён</span>}
+                  {b.branchAddress ?? (
+                    b.branchName ?? <span className="italic text-text-tertiary">Филиал удалён</span>
+                  )}
                 </div>
-                {b.branchAddress && (
-                  <div className="text-xs text-text-tertiary truncate">{b.branchAddress}</div>
+                {b.branchAddress && b.branchName && (
+                  <div className="text-xs text-text-tertiary truncate">{b.branchName}</div>
                 )}
               </div>
               <div className="text-sm font-semibold text-text-primary shrink-0">
