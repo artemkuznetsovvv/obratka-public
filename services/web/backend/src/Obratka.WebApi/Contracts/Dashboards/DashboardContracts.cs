@@ -25,4 +25,7 @@ public sealed record DashboardHeaderDto(
 public sealed record DashboardBranchDto(
     Guid BranchId,
     string? Name,
-    string? Address);
+    string? Address,
+    // City берётся из LogicalBranch.City (отдельное поле в webapi_db, а не
+    // парсится из Address). Нужно фронту для фильтра «Город» и группировок.
+    string? City);

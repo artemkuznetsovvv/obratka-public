@@ -22,6 +22,9 @@ export interface DashboardFiltersValue {
   periodFrom: string | null
   periodTo: string | null
   sources: string[]
+  // cities/branches связаны каскадом: при изменении cities автоматически
+  // пересчитываются branches (intersection). См. setCities в Provider.
+  cities: string[]
   branches: string[]
   topics: string[]
   sentiments: Sentiment[]
@@ -31,12 +34,11 @@ export interface DashboardFiltersValue {
 interface DashboardFiltersContextShape extends DashboardFiltersValue {
   setPeriod: (from: string | null, to: string | null) => void
   setSources: (next: string[]) => void
+  setCities: (next: string[]) => void
   setBranches: (next: string[]) => void
   setSentiments: (next: Sentiment[]) => void
   setStars: (next: Stars[]) => void
-  // Reset к исходным "всё выбрано" (используется кнопкой «Сбросить фильтры»).
   reset: () => void
-  // True если хоть один фильтр отличается от дефолта — нужен бейдж "n активных" / кнопка reset.
   hasActiveFilters: boolean
 }
 
@@ -56,17 +58,33 @@ export function DashboardFiltersProvider({
   // анализа», обычно узкое окно, которое сбивало бы дефолт фильтра.
   // Когда в Processing-Gateway появится period_from/to на analysis_jobs
   // (processing-gateway-todo.md #1) — заменим на честный период джоба.
+  // Уникальные города джоба (для фильтра «Город»). Берём только не-null;
+  // если у филиала city=null, он не попадает в city-фильтр, но всё равно
+  // присутствует в branches-фильтре (отображается без группировки).
+  const uniqueCities = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          header.branches
+            .map((b) => b.city)
+            .filter((c): c is string => !!c && c.length > 0),
+        ),
+      ),
+    [header.branches],
+  )
+
   const initial = useMemo<DashboardFiltersValue>(
     () => ({
       periodFrom: null,
       periodTo: null,
       sources: header.sources.slice(),
+      cities: uniqueCities.slice(),
       branches: header.branches.map((b) => b.branchId),
       topics: [],
       sentiments: [...ALL_SENTIMENTS],
       stars: [...ALL_STARS],
     }),
-    [header],
+    [header, uniqueCities],
   )
 
   const [state, setState] = useState<DashboardFiltersValue>(initial)
@@ -81,13 +99,32 @@ export function DashboardFiltersProvider({
       ...state,
       setPeriod: (from, to) => setState((s) => ({ ...s, periodFrom: from, periodTo: to })),
       setSources: (next) => setState((s) => ({ ...s, sources: next })),
+      // Каскад: при изменении cities обновляем branches как intersection
+      // с разрешёнными (филиалы в выбранных городах). Юзер «снял Москву» →
+      // все московские филиалы автоматически выпадают из branches-фильтра.
+      // Когда юзер «вернул Москву» — branches НЕ восстанавливаются автоматом
+      // (юзер сам выберет, какие из московских ему нужны).
+      setCities: (next) =>
+        setState((s) => {
+          const nextCitiesSet = new Set(next)
+          const allowedBranchIds = new Set(
+            header.branches
+              .filter((b) => !b.city || nextCitiesSet.has(b.city))
+              .map((b) => b.branchId),
+          )
+          return {
+            ...s,
+            cities: next,
+            branches: s.branches.filter((id) => allowedBranchIds.has(id)),
+          }
+        }),
       setBranches: (next) => setState((s) => ({ ...s, branches: next })),
       setSentiments: (next) => setState((s) => ({ ...s, sentiments: next })),
       setStars: (next) => setState((s) => ({ ...s, stars: next })),
       reset: () => setState(initial),
       hasActiveFilters,
     }),
-    [state, initial, hasActiveFilters],
+    [state, initial, hasActiveFilters, header.branches],
   )
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
@@ -104,6 +141,7 @@ function sameFilters(a: DashboardFiltersValue, b: DashboardFiltersValue): boolea
     a.periodFrom === b.periodFrom &&
     a.periodTo === b.periodTo &&
     sameArr(a.sources, b.sources) &&
+    sameArr(a.cities, b.cities) &&
     sameArr(a.branches, b.branches) &&
     sameArr(a.sentiments, b.sentiments) &&
     sameArr(a.stars, b.stars)

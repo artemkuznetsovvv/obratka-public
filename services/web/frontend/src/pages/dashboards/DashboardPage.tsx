@@ -99,6 +99,13 @@ function DashboardHeader({ data }: { data: DashboardHeaderDto }) {
             <span>
               {data.branches.length}{' '}
               {pluralize(data.branches.length, ['филиал', 'филиала', 'филиалов'])}
+              {/* Если филиалы в нескольких городах — указываем сколько городов */}
+              {(() => {
+                const cities = new Set(data.branches.map((b) => b.city).filter(Boolean))
+                return cities.size > 1
+                  ? ` в ${cities.size} ${pluralize(cities.size, ['городе', 'городах', 'городах'])}`
+                  : null
+              })()}
             </span>
             <span className="text-text-tertiary">·</span>
             <CalendarRange size={14} className="text-text-tertiary" />
@@ -174,28 +181,9 @@ function BranchesCollapsible({
         />
       </button>
       {expanded && (
-        <ul className="mt-3 space-y-2">
-          {branches.map((b) => (
-            <li
-              key={b.branchId}
-              className="rounded-xl border border-border-subtle bg-card/40 px-4 py-3"
-            >
-              {/* Адрес — главный идентификатор (см. cc6f441 / 18429ea):
-                  у сетевых брендов имя одинаковое у всех филиалов. */}
-              <div className="text-sm font-medium text-text-primary flex items-center gap-1">
-                <MapPin size={12} className="text-text-tertiary shrink-0" />
-                <span className="truncate">
-                  {b.address ?? (
-                    b.name ?? <span className="italic text-text-tertiary">Филиал удалён</span>
-                  )}
-                </span>
-              </div>
-              {b.address && b.name && (
-                <div className="text-xs text-text-tertiary mt-0.5 truncate">{b.name}</div>
-              )}
-            </li>
-          ))}
-        </ul>
+        <div className="mt-3">
+          <GroupedBranchList branches={branches} />
+        </div>
       )}
     </div>
   )
@@ -237,12 +225,16 @@ function DashboardBody({ header }: { header: DashboardHeaderDto }) {
 function BranchTabs({ branches }: { branches: DashboardHeaderDto['branches'] }) {
   const filters = useDashboardFilters()
   const selectedSet = new Set(filters.branches)
+  const uniqueCities = new Set(branches.map((b) => b.city).filter(Boolean))
+  const isMultiCity = uniqueCities.size > 1
   return (
     <Tabs defaultValue={branches[0].branchId} className="w-full">
       <TabsList className="h-auto flex-wrap p-1 mb-2 max-w-full">
         {branches.map((b) => {
           const isExcluded = !selectedSet.has(b.branchId)
-          const tabLabel = extractBranchLabel(b.address, b.name)
+          const tabLabel = extractBranchLabel(b.address, b.name, {
+            cityHint: isMultiCity ? b.city : null,
+          })
           // Tooltip всегда содержит full name+address для контекста (имя
           // может быть полезно, особенно когда из адреса торчит только
           // улица — «Skuratov на Пушкина, 5»).
@@ -277,6 +269,52 @@ function BranchTabs({ branches }: { branches: DashboardHeaderDto['branches'] }) 
 
 // extractBranchLabel вынесена в ./branchLabel.ts — переиспользуется в табах
 // (здесь) и в опциях фильтра «Филиал» (DashboardFilters).
+
+// Список филиалов в шапке. При multi-city группируем по городам с заголовком,
+// при одном городе — плоский список (без лишней секции).
+function GroupedBranchList({ branches }: { branches: DashboardHeaderDto['branches'] }) {
+  const groups = new Map<string, DashboardHeaderDto['branches']>()
+  for (const b of branches) {
+    const key = b.city ?? '— без города —'
+    const arr = groups.get(key) ?? []
+    arr.push(b)
+    groups.set(key, arr)
+  }
+  const isMultiCity = groups.size > 1
+  return (
+    <div className="space-y-3">
+      {Array.from(groups.entries()).map(([city, items]) => (
+        <div key={city}>
+          {isMultiCity && (
+            <div className="text-xs uppercase tracking-wide text-text-tertiary mb-1.5 px-1">
+              {city} · {items.length}
+            </div>
+          )}
+          <ul className="space-y-2">
+            {items.map((b) => (
+              <li
+                key={b.branchId}
+                className="rounded-xl border border-border-subtle bg-card/40 px-4 py-3"
+              >
+                <div className="text-sm font-medium text-text-primary flex items-center gap-1">
+                  <MapPin size={12} className="text-text-tertiary shrink-0" />
+                  <span className="truncate">
+                    {b.address ?? (
+                      b.name ?? <span className="italic text-text-tertiary">Филиал удалён</span>
+                    )}
+                  </span>
+                </div>
+                {b.address && b.name && (
+                  <div className="text-xs text-text-tertiary mt-0.5 truncate">{b.name}</div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 // ---- helpers ----
 function formatDateTime(iso: string): string {

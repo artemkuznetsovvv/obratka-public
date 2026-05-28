@@ -6,8 +6,25 @@
 //   «Улица Пушкина, 5, …»    → «Пушкина, 5»    (улица+дом, без префикса)
 //   «ул. Профсоюзная, 34, …» → «Профсоюзная, 34»
 //
+// Если cityHint указан И отличается от уже видного в извлечённой метке —
+// добавляем «· {city}» в конец. Используется в multi-city кейсе, когда
+// у филиалов в разных городах могут быть одинаковые улицы.
+//
 // Если адреса нет — возвращаем fallback (обычно name) или 'Без адреса'.
 export function extractBranchLabel(
+  address: string | null | undefined,
+  fallback: string | null | undefined,
+  options?: { cityHint?: string | null },
+): string {
+  const cityHint = options?.cityHint ?? null
+  const base = extractBaseLabel(address, fallback)
+  if (cityHint && !base.toLowerCase().includes(cityHint.toLowerCase())) {
+    return `${base} · ${cityHint}`
+  }
+  return base
+}
+
+function extractBaseLabel(
   address: string | null | undefined,
   fallback: string | null | undefined,
 ): string {

@@ -51,16 +51,39 @@ export function DashboardFilters({ header }: { header: DashboardHeaderDto }) {
     [header.sources],
   )
 
-  const branchOptions = useMemo<MultiSelectOption<string>[]>(
+  // Уникальные города джоба. Если >1 → показываем фильтр «Город» и добавляем
+  // city к лейблу филиалов (чтобы отличать одинаковые улицы в разных городах).
+  const uniqueCities = useMemo(
     () =>
-      header.branches.map((b) => ({
-        value: b.branchId,
-        // У сетевых брендов name одинаковое у всех — показываем «локацию»
-        // (улица+дом или ТЦ) из адреса. Та же утилита что в табах дашборда.
-        label: extractBranchLabel(b.address, b.name),
-      })),
+      Array.from(
+        new Set(
+          header.branches
+            .map((b) => b.city)
+            .filter((c): c is string => !!c && c.length > 0),
+        ),
+      ),
     [header.branches],
   )
+  const isMultiCity = uniqueCities.length > 1
+
+  const cityOptions = useMemo<MultiSelectOption<string>[]>(
+    () => uniqueCities.map((c) => ({ value: c, label: c })),
+    [uniqueCities],
+  )
+
+  // Фильтр «Филиал»: показываем только те филиалы, которые сейчас в выбранных
+  // городах (каскад вниз). При multi-city к лейблу добавляем «· Москва».
+  const branchOptions = useMemo<MultiSelectOption<string>[]>(() => {
+    const allowedCities = new Set(filters.cities)
+    return header.branches
+      .filter((b) => !b.city || allowedCities.size === 0 || allowedCities.has(b.city))
+      .map((b) => ({
+        value: b.branchId,
+        label: extractBranchLabel(b.address, b.name, {
+          cityHint: isMultiCity ? b.city : null,
+        }),
+      }))
+  }, [header.branches, filters.cities, isMultiCity])
 
   const sentimentOptions = useMemo<MultiSelectOption<Sentiment>[]>(
     () =>
@@ -108,9 +131,18 @@ export function DashboardFilters({ header }: { header: DashboardHeaderDto }) {
           selected={filters.sources}
           onChange={filters.setSources}
         />
-        {/* Фильтр «Филиал» бесполезен когда филиал один — скрываем. Карточки
-            всё равно получают branchId напрямую из секции; filters.branches в
-            Context остаётся валидным single-item массивом. */}
+        {/* Фильтр «Город» — виден только при ≥2 городах в джобе. Каскад вниз:
+            снятый город автоматически выпадает из «Филиал» (см. setCities в
+            DashboardFiltersContext). */}
+        {isMultiCity && (
+          <MultiSelectFilter
+            label="Город"
+            options={cityOptions}
+            selected={filters.cities}
+            onChange={filters.setCities}
+          />
+        )}
+        {/* Фильтр «Филиал» бесполезен когда филиал один — скрываем. */}
         {header.branches.length > 1 && (
           <MultiSelectFilter
             label="Филиал"

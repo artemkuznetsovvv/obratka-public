@@ -276,7 +276,7 @@ public sealed class AnalysesController(
         var branchIds = stats.Select(s => s.BranchId).Distinct().ToList();
         var branchInfos = await db.LogicalBranches.AsNoTracking()
             .Where(lb => lb.CompanyId == job.CompanyId && branchIds.Contains(lb.Id))
-            .Select(lb => new { lb.Id, lb.Name, lb.Address })
+            .Select(lb => new { lb.Id, lb.Name, lb.Address, lb.City })
             .ToListAsync(ct);
         var byId = branchInfos.ToDictionary(b => b.Id);
 
@@ -284,7 +284,7 @@ public sealed class AnalysesController(
             .Select(id =>
             {
                 byId.TryGetValue(id, out var info);
-                return new DashboardBranchDto(id, info?.Name, info?.Address);
+                return new DashboardBranchDto(id, info?.Name, info?.Address, info?.City);
             })
             .ToList();
 

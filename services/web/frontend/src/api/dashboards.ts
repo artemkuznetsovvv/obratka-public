@@ -6,6 +6,9 @@ export interface DashboardBranchDto {
   branchId: string
   name: string | null
   address: string | null
+  // City — отдельное поле из LogicalBranch.City (не парсится из address).
+  // Используется для фильтра «Город» и группировок при multi-city анализе.
+  city: string | null
 }
 
 export interface DashboardHeaderDto {
