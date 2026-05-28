@@ -15,6 +15,7 @@ import {
 } from '../DashboardFiltersContext'
 import { MultiSelectFilter, type MultiSelectOption } from './MultiSelectFilter'
 import { cn } from '@/lib/utils'
+import { extractBranchLabel } from '../branchLabel'
 
 const SOURCE_BADGE: Record<string, string> = {
   '2gis': 'bg-emerald-100 text-emerald-700',
@@ -54,7 +55,9 @@ export function DashboardFilters({ header }: { header: DashboardHeaderDto }) {
     () =>
       header.branches.map((b) => ({
         value: b.branchId,
-        label: b.name ?? 'Филиал удалён',
+        // У сетевых брендов name одинаковое у всех — показываем «локацию»
+        // (улица+дом или ТЦ) из адреса. Та же утилита что в табах дашборда.
+        label: extractBranchLabel(b.address, b.name),
       })),
     [header.branches],
   )
