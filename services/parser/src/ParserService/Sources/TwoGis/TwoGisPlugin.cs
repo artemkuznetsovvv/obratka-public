@@ -168,9 +168,17 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
                         _ = CaptureMarkersResponseAsync(response, realReviewsByFirmId);
                     };
 
-                    var citySlug = MapCityToSlug(request.City);
-                    var encodedQuery = Uri.EscapeDataString(request.Query);
-                    var searchUrl = $"https://2gis.ru/{citySlug}/search/{encodedQuery}";
+                    // 2GIS-овский citySlug в URL ненадёжен (n_novgorod vs nizhny_novgorod
+                    // vs nizhniy_novgorod — разные города ломают разный mapping). Полнотекст
+                    // 2gis сам разрешает локацию из строки запроса: "Surf Coffee нижний новгород"
+                    // через /moscow/search/ возвращает правильный нижегородский филиал.
+                    // Платим за это тем, что иногда в выдачу затёсывается 1 карточка из current-region
+                    // (moscow) — UI всё равно показывает чекбоксы per branch, пользователь её снимет.
+                    var fullQuery = string.IsNullOrWhiteSpace(request.City)
+                        ? request.Query
+                        : $"{request.Query} {request.City}";
+                    var encodedQuery = Uri.EscapeDataString(fullQuery);
+                    var searchUrl = $"https://2gis.ru/moscow/search/{encodedQuery}";
                     _logger.LogDebug("[2GIS] Открываю поиск: {Url}", searchUrl);
 
                     await page.GotoAsync(searchUrl, new PageGotoOptions
@@ -340,31 +348,6 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
     }
 
     // ---- Private: search ----
-
-    private static string MapCityToSlug(string? city)
-    {
-        if (string.IsNullOrWhiteSpace(city)) return "moscow";
-        var lower = city.Trim().ToLowerInvariant();
-        return lower switch
-        {
-            "москва" or "moscow" => "moscow",
-            "санкт-петербург" or "спб" or "saint-petersburg" or "spb" => "spb",
-            "новосибирск" or "novosibirsk" => "novosibirsk",
-            "екатеринбург" or "yekaterinburg" or "ekaterinburg" => "ekaterinburg",
-            "казань" or "kazan" => "kazan",
-            "нижний новгород" or "nizhny novgorod" => "nizhny_novgorod",
-            "челябинск" or "chelyabinsk" => "chelyabinsk",
-            "самара" or "samara" => "samara",
-            "омск" or "omsk" => "omsk",
-            "ростов-на-дону" or "rostov" => "rostov",
-            "уфа" or "ufa" => "ufa",
-            "красноярск" or "krasnoyarsk" => "krasnoyarsk",
-            "пермь" or "perm" => "perm",
-            "воронеж" or "voronezh" => "voronezh",
-            "волгоград" or "volgograd" => "volgograd",
-            _ => lower.Replace(' ', '_')
-        };
-    }
 
     private async Task<IReadOnlyList<SearchBranchResult>> ExtractSearchResultsAsync(
         IPage page, CancellationToken ct)
