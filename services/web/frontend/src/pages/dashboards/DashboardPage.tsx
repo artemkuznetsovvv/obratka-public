@@ -237,6 +237,11 @@ function BranchTabs({ branches }: { branches: DashboardHeaderDto['branches'] }) 
       <TabsList className="h-auto flex-wrap p-1 mb-2 max-w-full">
         {branches.map((b) => {
           const isExcluded = !selectedSet.has(b.branchId)
+          const tabLabel = extractTabLabel(b.address, b.name)
+          // Tooltip всегда содержит full name+address для контекста (имя
+          // может быть полезно, особенно когда из адреса торчит только
+          // улица — «Skuratov на Пушкина, 5»).
+          const tooltipParts = [b.name, b.address].filter(Boolean).join(' · ')
           return (
             <TabsTrigger
               key={b.branchId}
@@ -245,11 +250,13 @@ function BranchTabs({ branches }: { branches: DashboardHeaderDto['branches'] }) 
                 'whitespace-nowrap max-w-[14rem]',
                 isExcluded && 'opacity-50',
               )}
-              title={isExcluded ? 'Филиал исключён фильтром «Филиал»' : undefined}
+              title={
+                isExcluded
+                  ? `Филиал исключён фильтром «Филиал». ${tooltipParts}`
+                  : tooltipParts || undefined
+              }
             >
-              <span className="truncate">
-                {b.name ?? 'Удалён'}
-              </span>
+              <span className="truncate">{tabLabel ?? 'Удалён'}</span>
             </TabsTrigger>
           )
         })}
@@ -261,6 +268,34 @@ function BranchTabs({ branches }: { branches: DashboardHeaderDto['branches'] }) 
       ))}
     </Tabs>
   )
+}
+
+// Достаём компактную метку из адреса для подписи таба. У сетевых брендов
+// (Skuratov, Surf Coffee) у всех филиалов одинаковое name — отличить можно
+// только адресом. На табе мало места, поэтому берём «локацию»:
+//   «ТЦ KazanMall, …»        → «ТЦ KazanMall»  (якорь-ТЦ уникален сам по себе)
+//   «Улица Пушкина, 5, …»    → «Пушкина, 5»    (улица + дом, без префикса)
+//   «ул. Профсоюзная, 34, …» → «Профсоюзная, 34»
+// Если адреса нет — возвращаем имя как fallback (старое поведение).
+function extractTabLabel(address: string | null, fallback: string | null): string | null {
+  if (!address) return fallback
+  const segments = address.split(',').map((s) => s.trim()).filter(Boolean)
+  if (segments.length === 0) return fallback
+
+  const first = segments[0]
+  // ТЦ/ТРЦ/БЦ/ЖК — уникальный якорь, сам по себе достаточен.
+  if (/^(ТЦ|ТРЦ|ТРК|БЦ|ЖК|БЦ|МФК)\b/i.test(first)) {
+    return first
+  }
+
+  // Иначе пробуем «улица + дом». Убираем префикс «улица/ул./проспект/пр./...».
+  const streetWithoutPrefix = first.replace(
+    /^(улица|ул\.?|проспект|пр\.?|пр-кт|переулок|пер\.?|шоссе|ш\.?|бульвар|б-р|проезд|тупик)\s+/i,
+    '',
+  )
+  // Если есть второй сегмент и он похож на номер дома — добавляем.
+  const houseLike = segments[1] && /^[0-9]/.test(segments[1]) ? segments[1] : null
+  return houseLike ? `${streetWithoutPrefix}, ${houseLike}` : streetWithoutPrefix
 }
 
 // ---- helpers ----
