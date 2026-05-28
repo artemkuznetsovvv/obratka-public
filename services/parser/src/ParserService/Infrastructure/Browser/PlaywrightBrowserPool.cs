@@ -12,11 +12,18 @@ public class BrowserPoolOptions
     /// Run browser without GUI. Set to false to see the browser window (useful for debugging).
     /// </summary>
     public bool Headless { get; set; } = true;
+
+    /// <summary>
+    /// Max одновременно живых browser-контекстов. Должно быть ≥ Workers:MaxConcurrent × 2
+    /// (worst-case task держит 2 контекста: API-key probe + основной сбор), иначе воркеры
+    /// будут блокироваться на browser-семафоре.
+    /// </summary>
+    public int MaxContexts { get; set; } = 6;
 }
 
 public class PlaywrightBrowserPool : IBrowserPool, IAsyncDisposable
 {
-    private readonly SemaphoreSlim _semaphore = new(3, 3);
+    private readonly SemaphoreSlim _semaphore;
     private readonly SemaphoreSlim _playwrightInitLock = new(1, 1);
     private readonly ConcurrentDictionary<bool, Lazy<Task<BrowserInstance>>> _browsers = new();
     private readonly ILogger<PlaywrightBrowserPool> _logger;
@@ -44,6 +51,8 @@ public class PlaywrightBrowserPool : IBrowserPool, IAsyncDisposable
     {
         _logger = logger;
         _options = options.Value;
+        var capacity = Math.Max(1, _options.MaxContexts);
+        _semaphore = new SemaphoreSlim(capacity, capacity);
     }
 
     public async Task<IBrowserContext> AcquireAsync(BrowserAcquireOptions? options, CancellationToken ct)

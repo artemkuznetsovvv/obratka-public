@@ -94,6 +94,8 @@ builder.Services.AddSingleton<IReviewSourcePlugin, GoogleMapsPlugin>();
 
 // --- Background task processing ---
 builder.Services.AddSingleton<TaskQueue>();
+builder.Services.Configure<WorkersOptions>(
+    builder.Configuration.GetSection(WorkersOptions.SectionName));
 builder.Services.AddHostedService<CollectionTaskBackgroundService>();
 
 // --- Controllers + JSON ---

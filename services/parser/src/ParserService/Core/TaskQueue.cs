@@ -4,8 +4,9 @@ namespace ParserService.Core;
 
 public class TaskQueue
 {
+    // SingleReader=false — несколько worker'ов читают параллельно (см. CollectionTaskBackgroundService).
     private readonly Channel<Guid> _channel = Channel.CreateUnbounded<Guid>(
-        new UnboundedChannelOptions { SingleReader = true });
+        new UnboundedChannelOptions { SingleReader = false });
 
     public async ValueTask EnqueueAsync(Guid taskId, CancellationToken ct)
     {
