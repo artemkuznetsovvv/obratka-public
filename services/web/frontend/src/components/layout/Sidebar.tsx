@@ -13,7 +13,7 @@ interface NavItem {
 }
 
 const userNav: NavItem[] = [
-  { to: '/monitoring', label: 'Live-мониторинг', icon: Activity, disabled: true },
+  { to: '/monitoring', label: 'Live-мониторинг', icon: Activity },
   { to: '/history', label: 'История анализов', icon: Clock },
 ]
 

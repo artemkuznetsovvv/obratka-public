@@ -11,6 +11,9 @@ public sealed class Review
     public Guid BranchId { get; init; }
     public string Source { get; init; } = string.Empty;
     public DateTimeOffset ReviewDate { get; init; }
+    // collected_at — момент ингеста отзыва в processing_db (batch-таймстамп источника, не per-review).
+    // Нужен live-мониторингу: «новые за цикл» = collected_at >= cycleStart.
+    public DateTimeOffset CollectedAt { get; init; }
     public short? Stars { get; init; }
     // raw_text — оригинальный текст отзыва. Используется в endpoint'ах
     // «топ примеров» (М3 раскрытие, опц. блок «Топ позитивных/негативных»).

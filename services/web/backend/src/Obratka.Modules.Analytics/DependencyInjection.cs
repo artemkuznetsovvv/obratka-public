@@ -9,6 +9,7 @@ using Obratka.Modules.Analytics.Metrics.RecommendPercent;
 using Obratka.Modules.Analytics.Metrics.ReviewCount;
 using Obratka.Modules.Analytics.Metrics.SentimentDistribution;
 using Obratka.Modules.Analytics.Metrics.TopTopics;
+using Obratka.Modules.Analytics.Monitoring;
 using Obratka.Modules.Analytics.Recommendations;
 
 namespace Obratka.Modules.Analytics;
@@ -44,6 +45,7 @@ public static class DependencyInjection
             services.AddScoped<IRecommendPercentMetricService, RecommendPercentMetricService>();
             services.AddScoped<IRecentReviewsMetricService, RecentReviewsMetricService>();
             services.AddScoped<IRecommendationsService, RecommendationsService>();
+            services.AddScoped<IMonitoringStatsService, MonitoringStatsService>();
         }
 
         return services;

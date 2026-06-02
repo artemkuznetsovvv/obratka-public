@@ -46,9 +46,14 @@ const Ctx = createContext<DashboardFiltersContextShape | null>(null)
 
 export function DashboardFiltersProvider({
   header,
+  initialPeriodFrom = null,
+  initialPeriodTo = null,
   children,
 }: {
   header: DashboardHeaderDto
+  // Live-режим мониторинга задаёт стартовое окно (now-окно..now); по умолчанию null/null.
+  initialPeriodFrom?: string | null
+  initialPeriodTo?: string | null
   children: ReactNode
 }) {
   // Defaults: всё включено. Период по умолчанию = null/null («с самого начала»),
@@ -75,8 +80,8 @@ export function DashboardFiltersProvider({
 
   const initial = useMemo<DashboardFiltersValue>(
     () => ({
-      periodFrom: null,
-      periodTo: null,
+      periodFrom: initialPeriodFrom,
+      periodTo: initialPeriodTo,
       sources: header.sources.slice(),
       cities: uniqueCities.slice(),
       branches: header.branches.map((b) => b.branchId),
@@ -84,7 +89,7 @@ export function DashboardFiltersProvider({
       sentiments: [...ALL_SENTIMENTS],
       stars: [...ALL_STARS],
     }),
-    [header, uniqueCities],
+    [header, uniqueCities, initialPeriodFrom, initialPeriodTo],
   )
 
   const [state, setState] = useState<DashboardFiltersValue>(initial)

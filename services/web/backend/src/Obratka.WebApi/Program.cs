@@ -1,4 +1,6 @@
 using System.Text;
+using Hangfire;
+using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -11,6 +13,7 @@ using Obratka.WebApi.Companies;
 using Obratka.WebApi.Data;
 using Obratka.WebApi.Integration.ParserService;
 using Obratka.WebApi.Integration.ProcessingGateway;
+using Obratka.WebApi.Scheduling;
 using Serilog;
 using Serilog.Events;
 
@@ -45,12 +48,26 @@ builder.Services
     .Bind(builder.Configuration.GetSection(ProcessingGatewayOptions.SectionName))
     .ValidateOnStart();
 
+builder.Services
+    .AddOptions<Obratka.WebApi.Monitoring.MonitoringOptions>()
+    .Bind(builder.Configuration.GetSection(Obratka.WebApi.Monitoring.MonitoringOptions.SectionName));
+
 // ---- Database ----
 var connectionString = builder.Configuration.GetConnectionString("WebApiDb")
     ?? throw new InvalidOperationException("ConnectionStrings:WebApiDb must be configured");
 
 builder.Services.AddDbContext<WebApiDbContext>(options =>
     options.UseNpgsql(connectionString));
+
+// ---- Hangfire (ADR-005: планировщик live-мониторинга) ----
+// Storage — тот же PostgreSQL-инстанс webapi_db (схема hangfire создаётся автоматически).
+// Сервер живёт внутри процесса Web API; jobs только публикуют команды/дёргают PG (быстро).
+builder.Services.AddHangfire(cfg => cfg
+    .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+    .UseSimpleAssemblyNameTypeSerializer()
+    .UseRecommendedSerializerSettings()
+    .UsePostgreSqlStorage(c => c.UseNpgsqlConnection(connectionString)));
+builder.Services.AddHangfireServer();
 
 // ---- Identity ----
 builder.Services
@@ -115,6 +132,13 @@ builder.Services.AddAnalyticsModule(builder.Configuration);
 builder.Services.AddReportsModule();
 builder.Services.AddNotificationsModule();
 
+// ---- Live-мониторинг (ADR-005) ----
+builder.Services.AddScoped<IMonitoringScheduler, MonitoringScheduler>();
+// Runner резолвим через ActivatorUtilities: опциональные Analytics-сервисы (stats/recommendations)
+// не зарегистрированы при пустом ProcessingReadDb — default-параметры дадут null, а не падение DI.
+builder.Services.AddScoped<IMonitoringCycleRunner>(sp =>
+    ActivatorUtilities.CreateInstance<MonitoringCycleRunner>(sp));
+
 // ---- Parser-Service HTTP client ----
 builder.Services.AddTransient<ParserApiKeyHandler>();
 builder.Services.AddHttpClient<IParserServiceClient, ParserServiceClient>((sp, http) =>
@@ -162,6 +186,22 @@ using (var scope = app.Services.CreateScope())
     await initializer.InitializeAsync(CancellationToken.None);
 }
 
+// ---- Live-мониторинг: регистрация recurring-jobs ----
+// Hangfire персистит jobs в БД (переживают рестарт), но переустановка идемпотентна и гарантирует,
+// что cron совпадает с текущим конфигом. Reconcile-job — один глобальный.
+using (var scope = app.Services.CreateScope())
+{
+    var scheduler = scope.ServiceProvider.GetRequiredService<IMonitoringScheduler>();
+    scheduler.EnsureReconcileJob();
+
+    var db = scope.ServiceProvider.GetRequiredService<WebApiDbContext>();
+    var active = await db.MonitoringConfigs
+        .Where(m => m.Status == Obratka.WebApi.Monitoring.MonitoringStatus.Active)
+        .ToListAsync();
+    foreach (var cfg in active)
+        scheduler.Register(cfg);
+}
+
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
@@ -180,6 +220,12 @@ app.UseSerilogRequestLogging(options =>
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+
+// Hangfire Dashboard — только Admin (в Development открыт, см. фильтр).
+app.UseHangfireDashboard("/hangfire", new DashboardOptions
+{
+    Authorization = [new HangfireDashboardAuthFilter(app.Environment.IsDevelopment())]
+});
 
 app.Run();
 

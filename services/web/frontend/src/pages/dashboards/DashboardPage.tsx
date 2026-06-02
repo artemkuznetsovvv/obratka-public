@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Activity,
   ArrowLeft,
   Bell,
   Building2,
@@ -10,15 +11,26 @@ import {
   Clock,
   Download,
   Layers,
+  Loader2,
   MapPin,
+  RefreshCw,
 } from 'lucide-react'
 import { AppLayout } from '@/layouts/AppLayout'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { dashboardsApi, type DashboardHeaderDto } from '@/api/dashboards'
+import {
+  monitoringsApi,
+  MONITORING_STATUS_LABEL,
+  FREQUENCY_LABEL,
+  type MonitoringListItem,
+} from '@/api/monitorings'
+import { describeApiError } from '@/api/errors'
+import { useAuth } from '@/auth/AuthContext'
 import { cn } from '@/lib/utils'
 import { SOURCE_LABEL } from '@/pages/history/analysisStatus'
+import { MonitoringConfigDialog } from '@/pages/monitoring/MonitoringConfigDialog'
 import { DashboardFiltersProvider, useDashboardFilters } from './DashboardFiltersContext'
 import { DashboardFilters } from './components/DashboardFilters'
 import { BranchSection } from './components/BranchSection'
@@ -34,6 +46,8 @@ const SOURCE_BADGE: Record<string, string> = {
 export default function DashboardPage() {
   const { jobId } = useParams<{ jobId: string }>()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const monitoringId = searchParams.get('monitoring')
 
   const dashQuery = useQuery({
     queryKey: ['dashboards', jobId],
@@ -42,23 +56,51 @@ export default function DashboardPage() {
     staleTime: 30_000,
   })
 
+  // Live-режим: открыт из раздела «Мониторинги» (?monitoring=<id>). Тянем конфиг,
+  // чтобы знать окно/статус и применить окно к метрикам.
+  const monitoringQuery = useQuery({
+    queryKey: ['monitoring', monitoringId],
+    queryFn: () => monitoringsApi.get(monitoringId!),
+    enabled: !!monitoringId,
+    refetchInterval: 15_000,
+  })
+  const monitoring = monitoringQuery.data?.monitoring ?? null
+
+  // Окно live-режима: [now - windowDays, now] (даты, day-inclusive на бэке).
+  const livePeriod = useMemo(() => {
+    if (!monitoring) return { from: null as string | null, to: null as string | null }
+    const to = new Date()
+    const from = new Date()
+    from.setDate(from.getDate() - monitoring.windowDays)
+    return { from: ymd(from), to: ymd(to) }
+  }, [monitoring])
+
   return (
     <AppLayout
-      breadcrumbs={[
-        { label: 'История анализов', to: '/history' },
-        { label: jobId ? `${jobId.slice(0, 8)}…` : '—', to: `/history/${jobId}` },
-        { label: 'Дашборд' },
-      ]}
+      breadcrumbs={
+        monitoring
+          ? [
+              { label: 'Live-мониторинг', to: '/monitoring' },
+              { label: monitoring.companyName, to: `/monitoring/${monitoring.id}` },
+              { label: 'Дашборд' },
+            ]
+          : [
+              { label: 'История анализов', to: '/history' },
+              { label: jobId ? `${jobId.slice(0, 8)}…` : '—', to: `/history/${jobId}` },
+              { label: 'Дашборд' },
+            ]
+      }
     >
       <div className="max-w-6xl mx-auto">
         <div className="mb-6">
           <Button
             variant="outline"
-            onClick={() => navigate(`/history/${jobId}`)}
+            onClick={() => navigate(monitoring ? '/monitoring' : `/history/${jobId}`)}
             className="gap-2"
             size="sm"
           >
-            <ArrowLeft size={14} />К деталям анализа
+            <ArrowLeft size={14} />
+            {monitoring ? 'К мониторингам' : 'К деталям анализа'}
           </Button>
         </div>
 
@@ -71,7 +113,12 @@ export default function DashboardPage() {
         ) : !dashQuery.data ? (
           <Card className="p-8 text-text-secondary">Анализ не найден</Card>
         ) : (
-          <DashboardFiltersProvider header={dashQuery.data}>
+          <DashboardFiltersProvider
+            header={dashQuery.data}
+            initialPeriodFrom={livePeriod.from}
+            initialPeriodTo={livePeriod.to}
+          >
+            {monitoring && <LiveMonitoringBanner monitoring={monitoring} />}
             <DashboardHeader data={dashQuery.data} />
             <DashboardFilters header={dashQuery.data} />
             <DashboardBody header={dashQuery.data} />
@@ -82,12 +129,98 @@ export default function DashboardPage() {
   )
 }
 
+// ---- Live-баннер: статус мониторинга, время обновления, ручной запуск ----
+function LiveMonitoringBanner({ monitoring }: { monitoring: MonitoringListItem }) {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const runM = useMutation({
+    mutationFn: () => monitoringsApi.run(monitoring.id),
+    onSuccess: () => {
+      // Цикл асинхронный — обновим статус мониторинга через пару тиков поллинга.
+      queryClient.invalidateQueries({ queryKey: ['monitoring', monitoring.id] })
+    },
+  })
+
+  const statusColor =
+    monitoring.status === 'active'
+      ? 'bg-emerald-100 text-emerald-700'
+      : monitoring.status === 'paused'
+        ? 'bg-amber-100 text-amber-700'
+        : 'bg-red-100 text-red-700'
+
+  return (
+    <Card className="mb-4 p-4 border-brand/30 bg-state-active-bg/40">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap text-sm">
+          <span className="inline-flex items-center gap-1.5 font-semibold text-brand">
+            <Activity size={15} />
+            Live-мониторинг
+          </span>
+          <span className={cn('inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold', statusColor)}>
+            {MONITORING_STATUS_LABEL[monitoring.status]}
+          </span>
+          <span className="text-text-secondary">{FREQUENCY_LABEL[monitoring.frequency]}</span>
+          <span className="text-text-tertiary">· окно {monitoring.windowDays} дн.</span>
+          <span className="inline-flex items-center gap-1 text-text-tertiary">
+            <Clock size={12} />
+            {monitoring.lastCollectedAt
+              ? `Обновлено ${formatDateTime(monitoring.lastCollectedAt)}`
+              : 'Ещё не обновлялось'}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={() => runM.mutate()}
+            disabled={runM.isPending || monitoring.status === 'paused'}
+            title={monitoring.status === 'paused' ? 'Мониторинг на паузе' : 'Запустить цикл сейчас'}
+          >
+            {runM.isPending ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            Обновить вручную
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={() => navigate(`/monitoring/${monitoring.id}`)}
+          >
+            История циклов
+          </Button>
+        </div>
+      </div>
+      {runM.isSuccess && (
+        <div className="mt-2 text-xs text-text-secondary">
+          Цикл запущен — новые отзывы и обновлённый дашборд появятся через несколько минут.
+        </div>
+      )}
+    </Card>
+  )
+}
+
 // ---- Шапка дашборда ----
 function DashboardHeader({ data }: { data: DashboardHeaderDto }) {
+  const navigate = useNavigate()
+  const { user } = useAuth()
+  const isAdmin = user?.roles.includes('Admin') ?? false
+  const [monitorOpen, setMonitorOpen] = useState(false)
+
+  const createMonitoring = useMutation({
+    mutationFn: monitoringsApi.create,
+    onSuccess: () => {
+      setMonitorOpen(false)
+      navigate('/monitoring')
+    },
+  })
+
   const periodLabel = useMemo(() => {
     if (!data.periodFrom || !data.periodTo) return 'С самого начала'
     return `${formatYmd(data.periodFrom)} — ${formatYmd(data.periodTo)}`
   }, [data.periodFrom, data.periodTo])
+
+  // Мониторинг можно включать только на завершённом/частичном анализе.
+  const canMonitor = data.status === 'completed' || data.status === 'partial'
 
   return (
     <Card className="mb-6 p-6">
@@ -121,12 +254,48 @@ function DashboardHeader({ data }: { data: DashboardHeaderDto }) {
             <Download size={14} />
             Скачать PDF
           </Button>
-          <Button variant="outline" size="sm" disabled className="gap-2" title="Будет в OBR-38">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            disabled={!canMonitor}
+            title={canMonitor ? undefined : 'Доступно после завершения анализа'}
+            onClick={() => setMonitorOpen(true)}
+          >
             <Bell size={14} />
             Включить мониторинг
           </Button>
         </div>
       </div>
+
+      <MonitoringConfigDialog
+        open={monitorOpen}
+        onOpenChange={setMonitorOpen}
+        title="Включить мониторинг"
+        submitLabel="Включить мониторинг"
+        isAdmin={isAdmin}
+        availableSources={data.sources}
+        availableBranches={data.branches.map((b) => ({
+          branchId: b.branchId,
+          name: b.name,
+          address: b.address,
+          city: b.city,
+        }))}
+        submitting={createMonitoring.isPending}
+        errorMessage={
+          createMonitoring.isError ? describeApiError(createMonitoring.error) : null
+        }
+        onSubmit={(values) =>
+          createMonitoring.mutate({
+            companyId: data.companyId,
+            seedJobId: data.jobId,
+            sources: values.sources,
+            branchIds: values.branchIds,
+            windowDays: values.windowDays,
+            frequency: values.frequency,
+          })
+        }
+      />
 
       {data.sources.length > 0 && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -330,6 +499,13 @@ function formatDateTime(iso: string): string {
   } catch {
     return iso
   }
+}
+
+function ymd(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
 function formatYmd(iso: string): string {

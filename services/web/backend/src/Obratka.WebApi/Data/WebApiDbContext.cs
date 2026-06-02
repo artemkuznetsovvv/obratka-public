@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Obratka.WebApi.Auth;
 using Obratka.WebApi.Companies;
 using Obratka.WebApi.Geo;
+using Obratka.WebApi.Monitoring;
 
 namespace Obratka.WebApi.Data;
 
@@ -18,6 +19,8 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
     public DbSet<LogicalBranch> LogicalBranches => Set<LogicalBranch>();
     public DbSet<SearchCacheEntry> SearchCache => Set<SearchCacheEntry>();
     public DbSet<CityReference> Cities => Set<CityReference>();
+    public DbSet<MonitoringConfig> MonitoringConfigs => Set<MonitoringConfig>();
+    public DbSet<MonitoringCycle> MonitoringCycles => Set<MonitoringCycle>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -125,6 +128,51 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
                         v => v));
             b.HasIndex(x => new { x.QueryNormalized, x.CityNormalized, x.Source }).IsUnique();
             b.HasIndex(x => x.ExpiresAt);
+        });
+
+        builder.Entity<MonitoringConfig>(b =>
+        {
+            b.ToTable("monitoring_configs");
+            b.HasKey(x => x.Id);
+            // Sources — slug-и (text[]), как Company.Cities/DraftSources. BranchIds — uuid[].
+            b.Property(x => x.Sources).HasColumnType("text[]");
+            b.Property(x => x.BranchIds).HasColumnType("uuid[]");
+            b.Property(x => x.CronSchedule).HasMaxLength(100).IsRequired();
+            // Enum'ы — строками (читабельно в БД + стабильно при добавлении значений).
+            b.Property(x => x.Frequency).HasConversion<string>().HasMaxLength(20).IsRequired();
+            b.Property(x => x.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+            b.Property(x => x.LastRunStatus).HasConversion<string>().HasMaxLength(20);
+            b.HasIndex(x => x.CompanyId);
+            b.HasIndex(x => x.UserId);
+            b.HasIndex(x => x.SeedJobId);
+            b.HasOne<Company>()
+                .WithMany()
+                .HasForeignKey(x => x.CompanyId)
+                .OnDelete(DeleteBehavior.Cascade);
+            b.HasMany(x => x.Cycles)
+                .WithOne()
+                .HasForeignKey(c => c.MonitoringId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<MonitoringCycle>(b =>
+        {
+            b.ToTable("monitoring_cycles");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+            b.Property(x => x.SummarySnapshot).HasMaxLength(4000);
+            // Снапшот рекомендаций PG на момент цикла — jsonb (как SearchCacheEntry.Results).
+            b.Property(x => x.RecommendationsSnapshot)
+                .HasColumnType("jsonb")
+                .HasConversion(
+                    v => JsonSerializer.Serialize(v, JsonOptions),
+                    v => JsonSerializer.Deserialize<List<RecommendationSnapshotItem>>(v, JsonOptions) ?? new(),
+                    new ValueComparer<List<RecommendationSnapshotItem>>(
+                        (a, b) => ReferenceEquals(a, b),
+                        v => v == null ? 0 : v.Count,
+                        v => v));
+            b.HasIndex(x => x.MonitoringId);
+            b.HasIndex(x => new { x.MonitoringId, x.CycleNumber }).IsUnique();
         });
     }
 

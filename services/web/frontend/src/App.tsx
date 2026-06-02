@@ -9,13 +9,14 @@ import ParserTasksPage from '@/pages/admin/ParserTasksPage'
 import AnalysesPage from '@/pages/admin/AnalysesPage'
 import AnalysisDetailPage from '@/pages/admin/AnalysisDetailPage'
 import CompaniesPage from '@/pages/admin/CompaniesPage'
-import ComingSoonPage from '@/pages/ComingSoonPage'
 import NewAnalysisPage from '@/pages/analyses/NewAnalysisPage'
 import BranchSearchPage from '@/pages/analyses/BranchSearchPage'
 import AnalysisSummaryPage from '@/pages/analyses/AnalysisSummaryPage'
 import HistoryListPage from '@/pages/history/HistoryListPage'
 import HistoryDetailPage from '@/pages/history/HistoryDetailPage'
 import DashboardPage from '@/pages/dashboards/DashboardPage'
+import MonitoringListPage from '@/pages/monitoring/MonitoringListPage'
+import MonitoringDetailPage from '@/pages/monitoring/MonitoringDetailPage'
 
 export default function App() {
   return (
@@ -35,7 +36,15 @@ export default function App() {
         path="/monitoring"
         element={
           <ProtectedRoute>
-            <ComingSoonPage title="Live-мониторинг" breadcrumbs={[{ label: 'Live-мониторинг' }]} />
+            <MonitoringListPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/monitoring/:id"
+        element={
+          <ProtectedRoute>
+            <MonitoringDetailPage />
           </ProtectedRoute>
         }
       />
