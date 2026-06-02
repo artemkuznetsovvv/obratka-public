@@ -61,7 +61,31 @@ public sealed class AnalysisOrchestrator
             return;
         }
 
-        // Хотя бы один источник дал что-то — двигаем в LLM.
+        // Оптимизация цикла мониторинга: если все источники отработали без ошибок, но новых
+        // отзывов не принесли (sum NewReviewCount == 0), а у job-а уже есть собранные ранее
+        // отзывы — нет смысла гонять LLM заново (результат не изменится). Оставляем прежние
+        // результаты, job остаётся completed. Это избавляет от лишних LLM-прогонов на пустых
+        // циклах (модель «растущий seed-job»).
+        var anyFailed = progress.Values.Any(e => e.Status == "failed");
+        var newThisCycle = progress.Values.Sum(e => e.NewReviewCount ?? 0);
+        if (!anyFailed && newThisCycle == 0)
+        {
+            var hasExisting = await _db.AnalysisJobReviews.AnyAsync(l => l.AnalysisJobId == jobId, ct);
+            if (hasExisting)
+            {
+                job.Status = AnalysisJobStatus.Completed;
+                job.CompletedAt = DateTimeOffset.UtcNow;
+                job.Error = null;
+                await _db.SaveChangesAsync(ct);
+
+                _logger.LogInformation(
+                    "Job {AnalysisJobId}: re-collection found 0 new reviews — keeping previous results, LLM skipped",
+                    jobId);
+                return;
+            }
+        }
+
+        // Есть новые отзывы (или это первый сбор) — двигаем в LLM.
         await _llmDispatcher.DispatchAsync(jobId, ct);
     }
 }

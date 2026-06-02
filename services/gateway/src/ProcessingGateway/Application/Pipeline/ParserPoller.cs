@@ -163,9 +163,25 @@ public sealed class ParserPoller : BackgroundService
 
                 case "completed":
                 {
-                    var s3Url = status.S3Url
-                        ?? throw new InvalidOperationException(
-                            $"Parser reported completed but no s3_url for task {entry.TaskId}");
+                    // Пустой сбор без новых отзывов: Parser завершает completed БЕЗ s3-артефакта
+                    // (чтобы не затирать прежний raw/{source}.json). Скачивать/ингестить нечего —
+                    // 0 новых, сырьё в S3 и в reviews сохраняется как было.
+                    if (string.IsNullOrEmpty(status.S3Url))
+                    {
+                        progress[source] = entry with
+                        {
+                            Status = "completed",
+                            Progress = 100,
+                            ReviewCount = 0,
+                            NewReviewCount = 0
+                        };
+                        _logger.LogInformation(
+                            "Source {Source} completed: 0 new reviews (no S3 artifact, raw preserved)",
+                            source);
+                        break;
+                    }
+
+                    var s3Url = status.S3Url;
 
                     var payload = await blob.ReadRawAsync(s3Url, ct);
                     var entities = payload.Reviews
