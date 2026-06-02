@@ -26,7 +26,9 @@ internal sealed record RawCollectionEntry(
     [property: JsonPropertyName("progress")] int Progress,
     [property: JsonPropertyName("reviewCount")] int? ReviewCount,
     [property: JsonPropertyName("s3Url")] string? S3Url,
-    [property: JsonPropertyName("error")] string? Error);
+    [property: JsonPropertyName("error")] string? Error,
+    // Реально новые отзывы за этот сбор (PG-авторитет, см. PG #2). null если PG ещё не отдаёт поле.
+    [property: JsonPropertyName("newReviewCount")] int? NewReviewCount = null);
 
 internal sealed record RawAnalysisJobListResponse(
     [property: JsonPropertyName("total")] int Total,
@@ -133,7 +135,8 @@ public sealed record CollectionProgressDto(
     int Progress,
     int? ReviewCount,
     string? S3Url,
-    string? Error);
+    string? Error,
+    int? NewReviewCount);
 
 public sealed record AnalysisJobListResponse(
     int Total,
@@ -156,7 +159,8 @@ internal static class AnalysisJobMapping
                 kv.Value.Progress,
                 kv.Value.ReviewCount,
                 kv.Value.S3Url,
-                kv.Value.Error)),
+                kv.Value.Error,
+                kv.Value.NewReviewCount)),
         raw.PayloadUrl,
         raw.ResultReviewsUrl,
         raw.ResultSummaryUrl,

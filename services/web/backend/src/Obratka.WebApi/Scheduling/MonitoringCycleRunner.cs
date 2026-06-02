@@ -190,23 +190,34 @@ internal sealed class MonitoringCycleRunner(
         var now = DateTimeOffset.UtcNow;
         var cycleStatus = MapStatus(job.Status);
 
+        // Авторитетный «new per cycle» — сумма newReviewCount по источникам из PG (PG #2).
+        // Если PG ещё не отдаёт поле (нет ни одного non-null) — null, тогда фолбэк на
+        // read-only оценку по collected_at из stats.
+        int? pgNewCount = job.CollectionProgress.Values.Any(e => e.NewReviewCount.HasValue)
+            ? job.CollectionProgress.Values.Sum(e => e.NewReviewCount ?? 0)
+            : null;
+
         if (stats is not null)
         {
             try
             {
                 var s = await stats.ComputeCycleStatsAsync(config.SeedJobId, cycle.StartedAt, Ct);
-                cycle.NewReviewCount = s.NewReviewCount;
+                cycle.NewReviewCount = pgNewCount ?? s.NewReviewCount;
                 cycle.TotalReviewsAtCycle = s.TotalReviews;
                 cycle.NegativeRatioPp = s.NegativeRatioPp;
             }
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Reconcile: cycle stats failed for monitoring {Id}", config.Id);
+                if (pgNewCount.HasValue) cycle.NewReviewCount = pgNewCount.Value;
             }
         }
         else
         {
-            logger.LogWarning("Reconcile: ProcessingReadDb not configured — cycle stats skipped (monitoring {Id})",
+            // ProcessingReadDb не настроен (нет тональности/total), но new-count из PG доступен.
+            if (pgNewCount.HasValue) cycle.NewReviewCount = pgNewCount.Value;
+            logger.LogWarning(
+                "Reconcile: ProcessingReadDb not configured — only PG new-count used (monitoring {Id})",
                 config.Id);
         }
 
