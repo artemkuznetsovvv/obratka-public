@@ -171,8 +171,33 @@ public class CollectionTaskOrchestrator
         using var bookkeepingCts = new CancellationTokenSource(BookkeepingTimeout);
         var bk = bookkeepingCts.Token;
 
-        if (allReviews.Count > 0)
+        if (collectionError is null && allReviews.Count == 0)
         {
+            // Пустой сбор без ошибки: «новых отзывов нет» — это НЕ ошибка (контракт плагина),
+            // но и НЕ повод заливать пустой файл в S3: иначе мы затёрли бы прежний
+            // raw/{source}.json (важно для инкрементального сбора live-мониторинга — на цикле
+            // без новых отзывов нельзя терять ранее собранное сырьё в S3). Просто помечаем
+            // completed с review_count=0; S3Url НЕ трогаем (PG поймёт «нет артефакта = 0 новых»).
+            try
+            {
+                task.Status = CollectionTaskStatus.Completed;
+                task.Progress = 100;
+                task.ReviewCount = 0;
+                task.Error = null;
+                await _repository.UpdateAsync(task, bk);
+
+                _logger.LogInformation(
+                    "Task {TaskId} bookkeeping done: status=completed, 0 reviews (нет новых — S3 не трогаем)",
+                    taskId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Final UpdateAsync failed for task {TaskId}", taskId);
+            }
+        }
+        else if (collectionError is null)
+        {
+            // Успех с данными — заливаем результат в S3 и помечаем completed.
             try
             {
                 var result = new CollectionResult(
@@ -185,20 +210,16 @@ public class CollectionTaskOrchestrator
 
                 var s3Url = await _s3.UploadResultAsync(result, bk);
 
-                // Если был collectionError — это частичный сбор: данные сохранены, но статус failed.
-                // Если ошибки не было — completed.
-                task.Status = collectionError is null
-                    ? CollectionTaskStatus.Completed
-                    : CollectionTaskStatus.Failed;
+                task.Status = CollectionTaskStatus.Completed;
                 task.S3Url = s3Url;
                 task.Progress = 100;
                 task.ReviewCount = allReviews.Count;
-                task.Error = collectionError?.Message;
+                task.Error = null;
                 await _repository.UpdateAsync(task, bk);
 
                 _logger.LogInformation(
-                    "Task {TaskId} bookkeeping done: status={Status}, {ReviewCount} reviews → {S3Url}",
-                    taskId, task.Status, allReviews.Count, s3Url);
+                    "Task {TaskId} bookkeeping done: status=completed, {ReviewCount} reviews → {S3Url}",
+                    taskId, allReviews.Count, s3Url);
             }
             catch (Exception bookkeepingEx)
             {
@@ -219,13 +240,57 @@ public class CollectionTaskOrchestrator
                 }
             }
         }
+        else if (allReviews.Count > 0)
+        {
+            // Частичный сбор: была ошибка, но что-то успели собрать — данные сохраняем, статус failed.
+            try
+            {
+                var result = new CollectionResult(
+                    task.Id,
+                    task.JobId,
+                    task.Source.ToSlug(),
+                    task.CompanyId,
+                    DateTimeOffset.UtcNow,
+                    allReviews);
+
+                var s3Url = await _s3.UploadResultAsync(result, bk);
+
+                task.Status = CollectionTaskStatus.Failed;
+                task.S3Url = s3Url;
+                task.Progress = 100;
+                task.ReviewCount = allReviews.Count;
+                task.Error = collectionError.Message;
+                await _repository.UpdateAsync(task, bk);
+
+                _logger.LogWarning(
+                    "Task {TaskId} partial: status=failed, но {ReviewCount} отзывов сохранено → {S3Url}",
+                    taskId, allReviews.Count, s3Url);
+            }
+            catch (Exception bookkeepingEx)
+            {
+                _logger.LogError(bookkeepingEx,
+                    "Bookkeeping FAILED for task {TaskId} after collecting {Count} reviews — data may be lost",
+                    taskId, allReviews.Count);
+
+                try
+                {
+                    task.Status = CollectionTaskStatus.Failed;
+                    task.Error = $"Bookkeeping failed: {bookkeepingEx.Message}";
+                    await _repository.UpdateAsync(task, CancellationToken.None);
+                }
+                catch (Exception finalEx)
+                {
+                    _logger.LogError(finalEx, "Final UpdateAsync also failed for task {TaskId}", taskId);
+                }
+            }
+        }
         else
         {
-            // Ничего не собрали — обычный failure path.
+            // Реальная ошибка и ничего не собрано — failure path.
             try
             {
                 task.Status = CollectionTaskStatus.Failed;
-                task.Error = collectionError?.Message ?? "No reviews collected";
+                task.Error = collectionError.Message;
                 await _repository.UpdateAsync(task, bk);
             }
             catch (Exception ex)

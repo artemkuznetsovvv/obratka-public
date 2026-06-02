@@ -25,15 +25,21 @@ public class LocalFileResultStorage : IS3ResultStorage
 
     public async Task<string> UploadResultAsync(CollectionResult result, CancellationToken ct)
     {
-        var dir = Path.Combine(_basePath, result.JobId.ToString(), "raw");
-        Directory.CreateDirectory(dir);
-
-        var filePath = Path.Combine(dir, $"{result.Source}.json");
+        var rawDir = Path.Combine(_basePath, result.JobId.ToString(), "raw");
+        Directory.CreateDirectory(rawDir);
         var json = JsonSerializer.Serialize(result, JsonOptions);
 
-        await File.WriteAllTextAsync(filePath, json, ct);
+        // «Последний батч» — плоский файл (как раньше).
+        var latestPath = Path.Combine(rawDir, $"{result.Source}.json");
+        await File.WriteAllTextAsync(latestPath, json, ct);
 
-        _logger.LogInformation("Saved collection result to {Path}", filePath);
-        return filePath;
+        // Архив по циклам (вариант 2): raw/{source}/{taskId}.json — не перезатирается.
+        var archiveDir = Path.Combine(rawDir, result.Source);
+        Directory.CreateDirectory(archiveDir);
+        var archivePath = Path.Combine(archiveDir, $"{result.TaskId}.json");
+        await File.WriteAllTextAsync(archivePath, json, ct);
+
+        _logger.LogInformation("Saved collection result to {Path} (archive: {ArchivePath})", latestPath, archivePath);
+        return latestPath;
     }
 }

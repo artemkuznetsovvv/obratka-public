@@ -34,21 +34,30 @@ public class S3ResultStorage : IS3ResultStorage
 
     public async Task<string> UploadResultAsync(CollectionResult result, CancellationToken ct)
     {
-        var key = $"{result.JobId}/raw/{result.Source}.json";
         var json = JsonSerializer.Serialize(result, JsonOptions);
 
-        var request = new PutObjectRequest
+        // Плоский ключ — «последний батч» источника: его читает ингест PG (по status.S3Url),
+        // QA-скачивание `raw/<source>` и интеграционные тесты. Перезаписывается каждым сбором.
+        var latestKey = $"{result.JobId}/raw/{result.Source}.json";
+        // Архивный ключ — уникален на каждый сбор (taskId), поэтому НЕ перезатирается:
+        // история сырья по циклам live-мониторинга сохраняется целиком (вариант 2).
+        var archiveKey = $"{result.JobId}/raw/{result.Source}/{result.TaskId}.json";
+
+        await PutAsync(latestKey, json, ct);
+        await PutAsync(archiveKey, json, ct);
+
+        var s3Url = $"s3://{_bucketName}/{latestKey}";
+        _logger.LogInformation(
+            "Uploaded collection result to {S3Url} (archive: {ArchiveKey})", s3Url, archiveKey);
+        return s3Url;
+    }
+
+    private Task PutAsync(string key, string json, CancellationToken ct) =>
+        _s3.PutObjectAsync(new PutObjectRequest
         {
             BucketName = _bucketName,
             Key = key,
             ContentBody = json,
             ContentType = "application/json"
-        };
-
-        await _s3.PutObjectAsync(request, ct);
-
-        var s3Url = $"s3://{_bucketName}/{key}";
-        _logger.LogInformation("Uploaded collection result to {S3Url}", s3Url);
-        return s3Url;
-    }
+        }, ct);
 }
