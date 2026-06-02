@@ -124,8 +124,114 @@ public sealed class QaParserController : ControllerBase
         });
     }
 
+    /// Перезапустить сбор по ВСЕМ переданным источникам job-а одним вызовом — вход для цикла
+    /// live-мониторинга («растущий seed-job»). В отличие от restart-source:
+    ///   • guard от перекрытия циклов: если job уже `collecting` → 409 (предыдущий цикл ещё идёт);
+    ///   • допустимые исходные статусы — только терминальные (completed/partial/failed);
+    ///   • стартует источники одной операцией, изоляция сбоев per-source (ADR-001 §10): упавший
+    ///     на старте источник помечается failed, остальные продолжают → финал partial.
+    [HttpPost("restart-all/{jobId:guid}")]
+    public async Task<IActionResult> RestartAll(
+        Guid jobId,
+        [FromBody] RestartAllRequest request,
+        CancellationToken ct)
+    {
+        var job = await _db.AnalysisJobs.FirstOrDefaultAsync(j => j.Id == jobId, ct);
+        if (job is null) return NotFound();
+
+        // Guard #4: цикл уже идёт — не перезапускаем, чтобы не осиротить in-flight таски.
+        if (job.Status == AnalysisJobStatus.Collecting)
+            return Conflict(new { error = "Job уже в collecting — цикл сбора в процессе" });
+
+        var restartable = job.Status
+            is AnalysisJobStatus.Completed
+            or AnalysisJobStatus.Partial
+            or AnalysisJobStatus.Failed;
+        if (!restartable)
+            return Conflict(new
+            {
+                error = $"Job in status {job.Status.ToWire()}, restart-all допустим только из completed/partial/failed"
+            });
+
+        if (request.Sources is null || request.Sources.Count == 0)
+            return BadRequest(new { error = "sources required" });
+        if (request.Sources.Any(s => s.Branches is null || s.Branches.Count == 0))
+            return BadRequest(new { error = "each source must contain at least one branch" });
+
+        var now = DateTimeOffset.UtcNow;
+        var progress = new Dictionary<string, CollectionProgressEntry>(job.CollectionProgress);
+        var results = new List<object>();
+
+        foreach (var src in request.Sources)
+        {
+            try
+            {
+                var taskId = await _parser.StartCollectionAsync(new StartCollectionRequest(
+                    JobId: jobId,
+                    CompanyId: job.CompanyId,
+                    Source: src.Source,
+                    DateFrom: request.DateFrom,
+                    DateTo: request.DateTo,
+                    Branches: src.Branches), ct);
+
+                progress[src.Source] = new CollectionProgressEntry
+                {
+                    TaskId = taskId,
+                    StartedAt = now,
+                    Status = "pending",
+                    Progress = 0
+                };
+                results.Add(new { source = src.Source, task_id = taskId, started = true });
+            }
+            catch (Exception ex)
+            {
+                // Изоляция сбоев: источник не стартовал → failed, остальные продолжают.
+                progress[src.Source] = new CollectionProgressEntry
+                {
+                    Status = "failed",
+                    Error = $"restart failed to start: {ex.Message}"
+                };
+                results.Add(new { source = src.Source, task_id = (Guid?)null, started = false });
+                _logger.LogWarning(ex,
+                    "QA parser/restart-all: source {Source} failed to start for job {AnalysisJobId}",
+                    src.Source, jobId);
+            }
+        }
+
+        job.CollectionProgress = progress;
+
+        // Откатываем job в collecting (был терминальный) — ParserPoller подхватит pending-таски,
+        // по завершении AnalysisOrchestrator снова дойдёт до LLM и перепишет результаты.
+        var previousStatus = job.Status;
+        job.Status = AnalysisJobStatus.Collecting;
+        job.CompletedAt = null;
+        job.Error = null;
+
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogInformation(
+            "QA parser/restart-all: job={AnalysisJobId} sources={Sources} previous_status={PreviousStatus}",
+            jobId, string.Join(",", request.Sources.Select(s => s.Source)), previousStatus.ToWire());
+
+        return Accepted(new
+        {
+            previous_status = previousStatus.ToWire(),
+            current_status = job.Status.ToWire(),
+            tasks = results
+        });
+    }
+
     public sealed record RestartSourceRequest(
         IReadOnlyList<BranchTargetDto> Branches,
         DateTimeOffset? DateFrom,
         DateTimeOffset? DateTo);
+
+    public sealed record RestartAllRequest(
+        IReadOnlyList<RestartAllSource> Sources,
+        DateTimeOffset? DateFrom,
+        DateTimeOffset? DateTo);
+
+    public sealed record RestartAllSource(
+        string Source,
+        IReadOnlyList<BranchTargetDto> Branches);
 }
