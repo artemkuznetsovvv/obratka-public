@@ -18,7 +18,14 @@ public record CollectionProgressEntry
     /// единый формат, см. CLAUDE.md HTTP Status API).
     public int Progress { get; init; }
 
+    /// Сколько отзывов Parser вернул в окне этого сбора (включая уже существующие в БД —
+    /// дедуп их потом отсекает). Для общего счётчика/UI.
     public int? ReviewCount { get; init; }
+
+    /// Сколько отзывов РЕАЛЬНО новые для этого job-а в этом сборе (= новые строки в
+    /// `analysis_job_reviews`, возврат `JobReviewLinker.LinkAsync`). Авторитетный «new per cycle»
+    /// для live-мониторинга. null до завершения сбора источника.
+    public int? NewReviewCount { get; init; }
 
     public string? S3Url { get; init; }
 

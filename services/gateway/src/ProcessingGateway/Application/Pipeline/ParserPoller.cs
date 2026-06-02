@@ -173,7 +173,10 @@ public sealed class ParserPoller : BackgroundService
                         .ToList();
 
                     await inserter.InsertAsync(entities, ct);
-                    await linker.LinkAsync(
+                    // Возврат LinkAsync = новые строки в analysis_job_reviews для ЭТОГО job-а
+                    // = реально новые отзывы за этот сбор (повторно собранные уже слинкованы →
+                    // ON CONFLICT DO NOTHING их не считает). Авторитетный «new per cycle».
+                    var newLinked = await linker.LinkAsync(
                         job.Id,
                         entities.Select(e => e.CompositeKey).ToList(),
                         ct);
@@ -183,12 +186,13 @@ public sealed class ParserPoller : BackgroundService
                         Status = "completed",
                         Progress = 100,
                         ReviewCount = payload.Reviews.Count,
+                        NewReviewCount = newLinked,
                         S3Url = s3Url
                     };
 
                     _logger.LogInformation(
-                        "Source {Source} completed: ingested {ReviewCount} reviews from {S3Url}",
-                        source, payload.Reviews.Count, s3Url);
+                        "Source {Source} completed: {NewCount} new of {ReviewCount} collected from {S3Url}",
+                        source, newLinked, payload.Reviews.Count, s3Url);
                     break;
                 }
 
