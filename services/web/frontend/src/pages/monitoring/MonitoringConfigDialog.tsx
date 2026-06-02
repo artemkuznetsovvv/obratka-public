@@ -12,7 +12,6 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { SOURCE_LABEL } from '@/pages/history/analysisStatus'
 import {
-  WINDOW_OPTIONS,
   FREQUENCY_LABEL,
   frequenciesForRole,
   type MonitoringFrequency,
@@ -28,7 +27,6 @@ export interface BranchOption {
 export interface MonitoringConfigValues {
   sources: string[]
   branchIds: string[]
-  windowDays: number
   frequency: MonitoringFrequency
 }
 
@@ -64,7 +62,6 @@ export function MonitoringConfigDialog({
 
   const [sources, setSources] = useState<Set<string>>(new Set())
   const [branchIds, setBranchIds] = useState<Set<string>>(new Set())
-  const [windowDays, setWindowDays] = useState<number>(30)
   const [frequency, setFrequency] = useState<MonitoringFrequency>(defaultFreq)
   const [localError, setLocalError] = useState<string | null>(null)
 
@@ -73,7 +70,6 @@ export function MonitoringConfigDialog({
     if (!open) return
     setSources(new Set(initial?.sources ?? availableSources))
     setBranchIds(new Set(initial?.branchIds ?? availableBranches.map((b) => b.branchId)))
-    setWindowDays(initial?.windowDays ?? 30)
     const initFreq = initial?.frequency
     setFrequency(initFreq && freqOptions.includes(initFreq) ? initFreq : defaultFreq)
     setLocalError(null)
@@ -100,7 +96,6 @@ export function MonitoringConfigDialog({
     onSubmit({
       sources: [...sources],
       branchIds: [...branchIds],
-      windowDays,
       frequency,
     })
   }
@@ -173,17 +168,6 @@ export function MonitoringConfigDialog({
               {availableBranches.length === 0 && (
                 <div className="text-sm text-text-tertiary">Нет доступных филиалов.</div>
               )}
-            </div>
-          </Field>
-
-          {/* Окно */}
-          <Field label="Период окна (что показываем в live-режиме)">
-            <div className="flex flex-wrap gap-2">
-              {WINDOW_OPTIONS.map((w) => (
-                <Chip key={w.value} selected={windowDays === w.value} onClick={() => setWindowDays(w.value)}>
-                  {w.label}
-                </Chip>
-              ))}
             </div>
           </Field>
 

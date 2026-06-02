@@ -25,6 +25,10 @@ public sealed class MonitoringsController(
     IMonitoringStatsService? stats = null,
     IRecommendationsService? recommendations = null) : ControllerBase
 {
+    // Окно в настройках убрано из UX (период выбирается на дашборде). Колонку оставляем
+    // для совместимости со схемой, заполняем дефолтом.
+    private const int DefaultWindowDays = 30;
+
     // Включение мониторинга с дашборда: создаём config (active), снимаем baseline (cycle 0),
     // регистрируем recurring-job и стартуем первый цикл (ТЗ §1).
     [HttpPost]
@@ -42,7 +46,7 @@ public sealed class MonitoringsController(
             .SingleOrDefaultAsync(c => c.Id == request.CompanyId && c.OwnerUserId == ownerId, ct);
         if (company is null) return NotFound(new { error = "Company not found" });
 
-        if (!TryValidateSettings(request.Sources, request.BranchIds, request.WindowDays, request.Frequency,
+        if (!TryValidateSettings(request.Sources, request.BranchIds, request.Frequency,
                 out var frequency, out var validationError))
             return BadRequest(new { error = validationError });
 
@@ -75,7 +79,7 @@ public sealed class MonitoringsController(
             SeedJobId = request.SeedJobId,
             Sources = request.Sources.Distinct().ToList(),
             BranchIds = request.BranchIds.Distinct().ToList(),
-            WindowDays = request.WindowDays,
+            WindowDays = DefaultWindowDays,
             Frequency = frequency,
             CronSchedule = MonitoringFrequencies.ToCron(frequency),
             Status = MonitoringStatus.Active,
@@ -183,7 +187,7 @@ public sealed class MonitoringsController(
             c.CycleNumber,
             c.StartedAt,
             c.FinishedAt,
-            c.Status.ToString().ToLowerInvariant(),
+            c.Status.Wire(),
             c.PeriodFrom,
             c.PeriodTo,
             c.NewReviewCount,
@@ -213,13 +217,12 @@ public sealed class MonitoringsController(
             .SingleOrDefaultAsync(m => m.Id == id && m.UserId == ownerId, ct);
         if (config is null) return NotFound();
 
-        if (!TryValidateSettings(request.Sources, request.BranchIds, request.WindowDays, request.Frequency,
+        if (!TryValidateSettings(request.Sources, request.BranchIds, request.Frequency,
                 out var frequency, out var validationError))
             return BadRequest(new { error = validationError });
 
         config.Sources = request.Sources.Distinct().ToList();
         config.BranchIds = request.BranchIds.Distinct().ToList();
-        config.WindowDays = request.WindowDays;
         config.Frequency = frequency;
         config.CronSchedule = MonitoringFrequencies.ToCron(frequency);
         config.UpdatedAt = DateTimeOffset.UtcNow;
@@ -317,7 +320,7 @@ public sealed class MonitoringsController(
         var branchIds = configs.SelectMany(c => c.BranchIds).Distinct().ToList();
         var branches = await db.LogicalBranches.AsNoTracking()
             .Where(lb => branchIds.Contains(lb.Id))
-            .Select(lb => new { lb.Id, lb.Name, lb.City })
+            .Select(lb => new { lb.Id, lb.Name, lb.Address, lb.City })
             .ToListAsync(ct);
         var branchById = branches.ToDictionary(b => b.Id);
 
@@ -330,18 +333,18 @@ public sealed class MonitoringsController(
             c.BranchIds.Select(id =>
             {
                 branchById.TryGetValue(id, out var b);
-                return new MonitoringBranchDto(id, b?.Name, b?.City);
+                return new MonitoringBranchDto(id, b?.Name, b?.Address, b?.City);
             }).ToList(),
             c.WindowDays,
             c.Frequency.ToString(),
-            c.Status.ToString().ToLowerInvariant(),
+            c.Status.Wire(),
             c.LastCollectedAt,
-            c.LastRunStatus?.ToString().ToLowerInvariant(),
+            c.LastRunStatus?.Wire(),
             c.CreatedAt)).ToList();
     }
 
     private bool TryValidateSettings(
-        List<string> sources, List<Guid> branchIds, int windowDays, string frequencyRaw,
+        List<string> sources, List<Guid> branchIds, string frequencyRaw,
         out MonitoringFrequency frequency, out string? error)
     {
         frequency = default;
@@ -355,11 +358,6 @@ public sealed class MonitoringsController(
         if (branchIds is null || branchIds.Count == 0)
         {
             error = "Выберите хотя бы один филиал.";
-            return false;
-        }
-        if (!MonitoringFrequencies.AllowedWindowDays.Contains(windowDays))
-        {
-            error = "Недопустимое окно. Доступно: 7, 30, 90 дней.";
             return false;
         }
         if (!Enum.TryParse(frequencyRaw, ignoreCase: true, out frequency))

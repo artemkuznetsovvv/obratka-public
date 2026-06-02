@@ -3,7 +3,7 @@ import { http } from './http'
 // ----- Types (camelCase, как отдаёт Web API) -----
 
 export type MonitoringStatus = 'active' | 'paused' | 'error'
-export type MonitoringCycleStatus = 'running' | 'success' | 'partial' | 'failed'
+export type MonitoringCycleStatus = 'running' | 'success' | 'partial' | 'failed' | 'no_new'
 export type MonitoringFrequency =
   | 'Every10Min'
   | 'Every30Min'
@@ -15,6 +15,7 @@ export type MonitoringFrequency =
 export interface MonitoringBranch {
   id: string
   name: string | null
+  address: string | null
   city: string | null
 }
 
@@ -68,24 +69,16 @@ export interface CreateMonitoringRequest {
   seedJobId: string
   sources: string[]
   branchIds: string[]
-  windowDays: number
   frequency: MonitoringFrequency
 }
 
 export interface UpdateMonitoringRequest {
   sources: string[]
   branchIds: string[]
-  windowDays: number
   frequency: MonitoringFrequency
 }
 
 // ----- Option metadata (label + доступность по роли) -----
-
-export const WINDOW_OPTIONS: { value: number; label: string }[] = [
-  { value: 7, label: 'Последние 7 дней' },
-  { value: 30, label: 'Последние 30 дней' },
-  { value: 90, label: 'Последние 90 дней' },
-]
 
 export const FREQUENCY_LABEL: Record<MonitoringFrequency, string> = {
   Every10Min: 'Каждые 10 минут',

@@ -28,6 +28,7 @@ const CYCLE_STATUS: Record<MonitoringCycleStatus, { label: string; cls: string }
   success: { label: 'Успешно', cls: 'bg-emerald-100 text-emerald-700' },
   partial: { label: 'Частично', cls: 'bg-amber-100 text-amber-700' },
   failed: { label: 'Ошибка', cls: 'bg-red-100 text-red-700' },
+  no_new: { label: 'Нет новых отзывов', cls: 'bg-page-bg text-text-secondary' },
 }
 
 export default function MonitoringDetailPage() {
@@ -74,8 +75,8 @@ export default function MonitoringDetailPage() {
                     {monitoring.companyName}
                   </h1>
                   <div className="text-sm text-text-secondary">
-                    {MONITORING_STATUS_LABEL[monitoring.status]} · {FREQUENCY_LABEL[monitoring.frequency]} ·
-                    окно {monitoring.windowDays} дн. · {monitoring.branches.length}{' '}
+                    {MONITORING_STATUS_LABEL[monitoring.status]} · {FREQUENCY_LABEL[monitoring.frequency]} ·{' '}
+                    {monitoring.branches.length}{' '}
                     {pluralize(monitoring.branches.length, ['филиал', 'филиала', 'филиалов'])}
                   </div>
                 </div>
@@ -125,7 +126,7 @@ function CycleCard({ cycle, prev }: { cycle: MonitoringCycle; prev?: MonitoringC
         <div>
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-text-primary">
-              {isBaseline ? 'Базовый снимок' : `Цикл #${cycle.cycleNumber}`}
+              {isBaseline ? 'Первичный анализ' : `Цикл #${cycle.cycleNumber}`}
             </span>
             <span className={cn('inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold', status.cls)}>
               {cycle.status === 'running' ? (
@@ -146,7 +147,7 @@ function CycleCard({ cycle, prev }: { cycle: MonitoringCycle; prev?: MonitoringC
           </div>
         </div>
 
-        {!isBaseline && (
+        {!isBaseline && cycle.status !== 'no_new' && (
           <div className="flex items-center gap-4 text-sm">
             <Metric label="Новых" value={`+${cycle.newReviewCount}`} />
             <Metric label="Всего" value={String(cycle.totalReviewsAtCycle)} />

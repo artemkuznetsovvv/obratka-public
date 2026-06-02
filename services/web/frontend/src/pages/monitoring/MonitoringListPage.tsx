@@ -10,7 +10,6 @@ import {
   Pause,
   Pencil,
   Play,
-  RefreshCw,
   Trash2,
 } from 'lucide-react'
 import { AppLayout } from '@/layouts/AppLayout'
@@ -53,13 +52,11 @@ export default function MonitoringListPage() {
 
   const pauseM = useMutation({ mutationFn: monitoringsApi.pause, onSuccess: invalidate })
   const resumeM = useMutation({ mutationFn: monitoringsApi.resume, onSuccess: invalidate })
-  const runM = useMutation({ mutationFn: monitoringsApi.run, onSuccess: invalidate })
   const removeM = useMutation({ mutationFn: monitoringsApi.remove, onSuccess: invalidate })
 
   const busyId =
     pauseM.isPending ? pauseM.variables
     : resumeM.isPending ? resumeM.variables
-    : runM.isPending ? runM.variables
     : removeM.isPending ? removeM.variables
     : null
 
@@ -95,7 +92,6 @@ export default function MonitoringListPage() {
                 onOpen={() => navigate(`/history/${m.seedJobId}/dashboard?monitoring=${m.id}`)}
                 onPause={() => pauseM.mutate(m.id)}
                 onResume={() => resumeM.mutate(m.id)}
-                onRun={() => runM.mutate(m.id)}
                 onEdit={() => setEditing(m)}
                 onDelete={() => {
                   if (
@@ -132,7 +128,6 @@ function MonitoringRow({
   onOpen,
   onPause,
   onResume,
-  onRun,
   onEdit,
   onDelete,
 }: {
@@ -141,7 +136,6 @@ function MonitoringRow({
   onOpen: () => void
   onPause: () => void
   onResume: () => void
-  onRun: () => void
   onEdit: () => void
   onDelete: () => void
 }) {
@@ -150,7 +144,7 @@ function MonitoringRow({
       ? '—'
       : item.branches
           .slice(0, 2)
-          .map((b) => b.name ?? b.city ?? '—')
+          .map((b) => b.address ?? b.name ?? b.city ?? '—')
           .join(', ') + (item.branches.length > 2 ? ` +${item.branches.length - 2}` : '')
 
   return (
@@ -175,7 +169,6 @@ function MonitoringRow({
           </div>
           <div className="mt-1 flex items-center gap-3 text-xs text-text-tertiary flex-wrap">
             <span>{FREQUENCY_LABEL[item.frequency]}</span>
-            <span>· окно {item.windowDays} дн.</span>
             <span className="flex items-center gap-1">
               <Clock size={11} />
               {item.lastCollectedAt
@@ -189,16 +182,6 @@ function MonitoringRow({
           <Button variant="outline" size="sm" className="gap-1" onClick={onOpen}>
             <ExternalLink size={13} />
             Открыть
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1"
-            onClick={onRun}
-            disabled={busy || item.status === 'paused'}
-            title="Обновить вручную"
-          >
-            <RefreshCw size={13} />
           </Button>
           {item.status === 'paused' ? (
             <Button variant="outline" size="sm" className="gap-1" onClick={onResume} disabled={busy}>
@@ -276,7 +259,6 @@ function EditMonitoringDialog({
       initial={{
         sources: monitoring.sources,
         branchIds: monitoring.branches.map((b) => b.id),
-        windowDays: monitoring.windowDays,
         frequency: monitoring.frequency,
       }}
       submitting={updateM.isPending}

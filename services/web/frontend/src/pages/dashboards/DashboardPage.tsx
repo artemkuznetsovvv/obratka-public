@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   Activity,
   ArrowLeft,
@@ -11,9 +11,7 @@ import {
   Clock,
   Download,
   Layers,
-  Loader2,
   MapPin,
-  RefreshCw,
 } from 'lucide-react'
 import { AppLayout } from '@/layouts/AppLayout'
 import { Button } from '@/components/ui/button'
@@ -56,8 +54,9 @@ export default function DashboardPage() {
     staleTime: 30_000,
   })
 
-  // Live-режим: открыт из раздела «Мониторинги» (?monitoring=<id>). Тянем конфиг,
-  // чтобы знать окно/статус и применить окно к метрикам.
+  // Live-режим: открыт из раздела «Мониторинги» (?monitoring=<id>). Тянем конфиг для шапки
+  // (статус/последнее обновление/ручной запуск). Период выбирается на самом дашборде —
+  // отдельное «окно мониторинга» убрано.
   const monitoringQuery = useQuery({
     queryKey: ['monitoring', monitoringId],
     queryFn: () => monitoringsApi.get(monitoringId!),
@@ -65,15 +64,6 @@ export default function DashboardPage() {
     refetchInterval: 15_000,
   })
   const monitoring = monitoringQuery.data?.monitoring ?? null
-
-  // Окно live-режима: [now - windowDays, now] (даты, day-inclusive на бэке).
-  const livePeriod = useMemo(() => {
-    if (!monitoring) return { from: null as string | null, to: null as string | null }
-    const to = new Date()
-    const from = new Date()
-    from.setDate(from.getDate() - monitoring.windowDays)
-    return { from: ymd(from), to: ymd(to) }
-  }, [monitoring])
 
   return (
     <AppLayout
@@ -113,11 +103,7 @@ export default function DashboardPage() {
         ) : !dashQuery.data ? (
           <Card className="p-8 text-text-secondary">Анализ не найден</Card>
         ) : (
-          <DashboardFiltersProvider
-            header={dashQuery.data}
-            initialPeriodFrom={livePeriod.from}
-            initialPeriodTo={livePeriod.to}
-          >
+          <DashboardFiltersProvider header={dashQuery.data}>
             {monitoring && <LiveMonitoringBanner monitoring={monitoring} />}
             <DashboardHeader data={dashQuery.data} />
             <DashboardFilters header={dashQuery.data} />
@@ -129,17 +115,9 @@ export default function DashboardPage() {
   )
 }
 
-// ---- Live-баннер: статус мониторинга, время обновления, ручной запуск ----
+// ---- Live-баннер: статус мониторинга, время последнего обновления ----
 function LiveMonitoringBanner({ monitoring }: { monitoring: MonitoringListItem }) {
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
-  const runM = useMutation({
-    mutationFn: () => monitoringsApi.run(monitoring.id),
-    onSuccess: () => {
-      // Цикл асинхронный — обновим статус мониторинга через пару тиков поллинга.
-      queryClient.invalidateQueries({ queryKey: ['monitoring', monitoring.id] })
-    },
-  })
 
   const statusColor =
     monitoring.status === 'active'
@@ -160,7 +138,6 @@ function LiveMonitoringBanner({ monitoring }: { monitoring: MonitoringListItem }
             {MONITORING_STATUS_LABEL[monitoring.status]}
           </span>
           <span className="text-text-secondary">{FREQUENCY_LABEL[monitoring.frequency]}</span>
-          <span className="text-text-tertiary">· окно {monitoring.windowDays} дн.</span>
           <span className="inline-flex items-center gap-1 text-text-tertiary">
             <Clock size={12} />
             {monitoring.lastCollectedAt
@@ -173,28 +150,12 @@ function LiveMonitoringBanner({ monitoring }: { monitoring: MonitoringListItem }
             variant="outline"
             size="sm"
             className="gap-2"
-            onClick={() => runM.mutate()}
-            disabled={runM.isPending || monitoring.status === 'paused'}
-            title={monitoring.status === 'paused' ? 'Мониторинг на паузе' : 'Запустить цикл сейчас'}
-          >
-            {runM.isPending ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-            Обновить вручную
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-2"
             onClick={() => navigate(`/monitoring/${monitoring.id}`)}
           >
             История циклов
           </Button>
         </div>
       </div>
-      {runM.isSuccess && (
-        <div className="mt-2 text-xs text-text-secondary">
-          Цикл запущен — новые отзывы и обновлённый дашборд появятся через несколько минут.
-        </div>
-      )}
     </Card>
   )
 }
@@ -291,7 +252,6 @@ function DashboardHeader({ data }: { data: DashboardHeaderDto }) {
             seedJobId: data.jobId,
             sources: values.sources,
             branchIds: values.branchIds,
-            windowDays: values.windowDays,
             frequency: values.frequency,
           })
         }
@@ -499,13 +459,6 @@ function formatDateTime(iso: string): string {
   } catch {
     return iso
   }
-}
-
-function ymd(d: Date): string {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
 }
 
 function formatYmd(iso: string): string {

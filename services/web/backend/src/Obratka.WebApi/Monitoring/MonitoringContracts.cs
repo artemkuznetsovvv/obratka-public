@@ -7,18 +7,16 @@ public sealed record CreateMonitoringRequest(
     Guid SeedJobId,
     List<string> Sources,
     List<Guid> BranchIds,
-    int WindowDays,
     string Frequency); // enum-токен: Every10Min|Every30Min|Daily|Weekly|Biweekly|Monthly
 
 public sealed record UpdateMonitoringRequest(
     List<string> Sources,
     List<Guid> BranchIds,
-    int WindowDays,
     string Frequency);
 
 // ----- Responses -----
 
-public sealed record MonitoringBranchDto(Guid Id, string? Name, string? City);
+public sealed record MonitoringBranchDto(Guid Id, string? Name, string? Address, string? City);
 
 public sealed record MonitoringListItemDto(
     Guid Id,

@@ -264,15 +264,24 @@ internal sealed class MonitoringCycleRunner(
             cycle.NegativeSpikeTriggered = true;
         }
 
-        cycle.Status = cycleStatus;
+        // Успешный цикл без новых отзывов — это не «успех» и не «ошибка», а «нет новых».
+        // (Partial/Failed оставляем как есть — там был реальный сбой источника.)
+        var effectiveStatus =
+            cycleStatus == MonitoringCycleStatus.Success && cycle.NewReviewCount == 0
+                ? MonitoringCycleStatus.NoNewReviews
+                : cycleStatus;
+
+        cycle.Status = effectiveStatus;
         cycle.FinishedAt = now;
 
-        // Watermark двигаем только при успехе/partial; на failed оставляем старый — следующий цикл
-        // переберёт то же окно.
-        if (cycleStatus is MonitoringCycleStatus.Success or MonitoringCycleStatus.Partial)
+        // Watermark двигаем при любом не-failed исходе (успех/partial/нет-новых) — окно проверено
+        // вплоть до cycleStart; на failed оставляем старый, чтобы следующий цикл перебрал то же окно.
+        if (effectiveStatus is MonitoringCycleStatus.Success
+            or MonitoringCycleStatus.Partial
+            or MonitoringCycleStatus.NoNewReviews)
             config.LastCollectedAt = cycle.StartedAt;
-        config.LastRunStatus = cycleStatus;
-        config.Status = cycleStatus == MonitoringCycleStatus.Failed
+        config.LastRunStatus = effectiveStatus;
+        config.Status = effectiveStatus == MonitoringCycleStatus.Failed
             ? MonitoringStatus.Error
             : (config.Status == MonitoringStatus.Error ? MonitoringStatus.Active : config.Status);
         config.UpdatedAt = now;
@@ -283,7 +292,7 @@ internal sealed class MonitoringCycleRunner(
         try
         {
             await notifications.SendMonitoringCycleResultAsync(
-                config.UserId, config.Id, cycleStatus.ToString().ToLowerInvariant(),
+                config.UserId, config.Id, effectiveStatus.Wire(),
                 cycle.NewReviewCount, cycle.PeriodFrom, cycle.PeriodTo, Ct);
 
             if (cycle.NegativeSpikeTriggered && prev is not null)
@@ -291,9 +300,10 @@ internal sealed class MonitoringCycleRunner(
                     config.UserId, config.Id, prev.NegativeRatioPp, cycle.NegativeRatioPp,
                     cycle.NewReviewCount, Ct);
 
-            if (cycleStatus is MonitoringCycleStatus.Partial or MonitoringCycleStatus.Failed)
+            // Алерт админу — только на реальные проблемы (partial/failed), не на «нет новых».
+            if (effectiveStatus is MonitoringCycleStatus.Partial or MonitoringCycleStatus.Failed)
                 await notifications.SendAdminAlertAsync(
-                    $"Monitoring {config.Id} cycle #{cycle.CycleNumber} finished: {cycleStatus}.",
+                    $"Monitoring {config.Id} cycle #{cycle.CycleNumber} finished: {effectiveStatus}.",
                     config.Id.ToString("N"), Ct);
         }
         catch (Exception ex)
@@ -303,7 +313,7 @@ internal sealed class MonitoringCycleRunner(
 
         logger.LogInformation(
             "Monitoring {Id}: cycle #{Num} finalized {Status}, +{New} new, neg={Neg:0.0}pp, spike={Spike}",
-            config.Id, cycle.CycleNumber, cycleStatus, cycle.NewReviewCount, cycle.NegativeRatioPp,
+            config.Id, cycle.CycleNumber, effectiveStatus, cycle.NewReviewCount, cycle.NegativeRatioPp,
             cycle.NegativeSpikeTriggered);
     }
 
