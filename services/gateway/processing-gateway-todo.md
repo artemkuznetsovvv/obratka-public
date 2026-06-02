@@ -185,3 +185,55 @@ Snapshot полной конфигурации запуска на момент 
   изменений мониторинга видна
 - Старые job'ы без snapshot (до миграции) — фронт fallback'ится на текущую
   Company (как сейчас) с пометкой «параметры могли измениться»
+
+---
+
+## 3. Live-мониторинг: UPSERT разметки + авторитетный new-review-count + restart-all
+
+**Откуда запрос:** Web API → live-мониторинг (`MonitoringCycleRunner`, см. `Web/live-monitoring-plan.md`).
+**Приоритет:** высокий — без этого цикл мониторинга работает, но с двумя дефектами (см. ниже).
+**Дата:** 2026-05-29.
+
+### Контекст
+
+Реализован live-мониторинг по модели **«растущий seed-job»**: Web API каждый цикл дёргает
+`POST /api/qa/parser/restart-source/{jobId}/{source}` с `dateFrom = lastCollectedAt` по одному
+и тому же seed-job, PG авто-доезжает пайплайн (сбор → re-LLM на ВСЁМ наборе → overwrite
+summary/recs). Web API НЕ ждёт — финализирует поллингом `GET /api/qa/analyses/{jobId}` до
+терминального статуса. Это работает на существующих примитивах PG, но нужны 3 доработки.
+
+### Что нужно поменять (в Processing-Gateway)
+
+1. **UPSERT разметки — обновлять и старые отзывы (требование пользователя).**
+   Сейчас ингест LLM-результата (`ReviewLlmResultBulkInserter`) делает
+   `INSERT ... ON CONFLICT (review_id, analysis_job_id) DO NOTHING` → при повторном прогоне
+   старые отзывы НЕ переразмечаются. Поменять на
+   `ON CONFLICT (review_id, analysis_job_id) DO UPDATE SET overall_sentiment = EXCLUDED.overall_sentiment,
+   overall_confidence = EXCLUDED.overall_confidence, aspects = EXCLUDED.aspects, processed_at = NOW()`.
+   Сырьё `reviews` НЕ трогаем — там по-прежнему `ON CONFLICT (composite_key) DO NOTHING` (append-only).
+
+2. **Авторитетный new-review-count за цикл.**
+   `ParserPoller` (~ингест per source) **выбрасывает** возврат `JobReviewLinker.LinkAsync` (=
+   реально новые линки в `analysis_job_reviews` для этого job-а) и `RawReviewBulkInserter.InsertAsync`.
+   Захватить link-delta, сложить per source в `collection_progress[source].new_review_count`,
+   отдавать его в `GET /api/qa/analyses/{jobId}` (snake_case `new_review_count`).
+   *(Сейчас Web API аппроксимирует «новые» через `reviews.collected_at >= cycleStart` read-only —
+   работает, но авторитет у link-delta; когда поле появится, Web API переключится на него.)*
+
+3. **`POST /api/qa/parser/restart-all/{jobId}`** — рестарт всех источников job-а одной операцией
+   с единым `dateFrom`/`dateTo`. Сейчас Web API вынужден звать `restart-source` по разу на источник
+   (N HTTP-вызовов + риск гонок частичного рестарта). Тело — опц. список branches per source либо
+   «как было». Возвращает map источник→task_id.
+
+4. **Concurrency-guard на rest­art.** Сейчас `RestartSource` разрешает рестарт из `collecting`
+   → второй цикл может осиротить in-flight task первого. Запретить рестарт, если job уже
+   `collecting` (вернуть 409). Из `sent_to_llm`/`computing_aggregates` 409 уже есть. Web API
+   трактует 409 как «пропустить цикл», не как ошибку.
+
+### Acceptance criteria
+
+- Повторный прогон LLM на том же job-е **обновляет** `review_llm_results` всех отзывов
+  (`processed_at` свежий), сырьё `reviews` не меняется.
+- `GET /api/qa/analyses/{jobId}` отдаёт `new_review_count` per source = числу реально новых линков
+  за последний цикл.
+- `restart-all` поднимает все источники одним вызовом; одновременный второй цикл получает 409.
