@@ -135,16 +135,21 @@ export function MonitoringConfigDialog({
               {availableBranches.map((b) => {
                 const checked = branchIds.has(b.branchId)
                 const label = b.address ?? b.name ?? 'Филиал'
+                // Единственный филиал нельзя снять — иначе мониторинг остался бы без филиалов.
+                const locked = availableBranches.length === 1
                 return (
                   <button
                     type="button"
                     key={b.branchId}
-                    onClick={() => setBranchIds((prev) => toggle(prev, b.branchId))}
+                    onClick={locked ? undefined : () => setBranchIds((prev) => toggle(prev, b.branchId))}
+                    disabled={locked}
+                    title={locked ? 'Единственный филиал — обязателен для мониторинга' : undefined}
                     className={cn(
                       'w-full flex items-start gap-2 rounded-lg border px-3 py-2 text-left transition-colors',
                       checked
                         ? 'border-brand bg-state-active-bg'
                         : 'border-border-subtle bg-card hover:bg-page-bg',
+                      locked && 'cursor-default',
                     )}
                   >
                     <span
