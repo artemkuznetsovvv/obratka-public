@@ -109,11 +109,12 @@ public sealed class LlmResultIngestor
                 summaryOutput.RecommendationsCount, summaryOutput.FullRecommendations.Count);
         }
 
-        // Bulk insert per-review результатов (ON CONFLICT DO NOTHING).
-        var insertedReviews = await _reviewsInserter.InsertAsync(jobId, reviewsOutput.Reviews, ct);
+        // Bulk UPSERT per-review результатов (ON CONFLICT DO UPDATE — освежает и старые отзывы
+        // при повторном прогоне цикла мониторинга).
+        var upsertedReviews = await _reviewsInserter.InsertAsync(jobId, reviewsOutput.Reviews, ct);
         _logger.LogInformation(
-            "Saved {Inserted} per-review LLM results for job {AnalysisJobId} ({TotalProvided} provided by LLM)",
-            insertedReviews, jobId, reviewsOutput.Reviews.Count);
+            "Upserted {Upserted} per-review LLM results for job {AnalysisJobId} ({TotalProvided} provided by LLM)",
+            upsertedReviews, jobId, reviewsOutput.Reviews.Count);
 
         // DELETE + bulk INSERT recommendations (replay-идемпотентность).
         var insertedRecs = await _recommendationsWriter.ReplaceAllAsync(

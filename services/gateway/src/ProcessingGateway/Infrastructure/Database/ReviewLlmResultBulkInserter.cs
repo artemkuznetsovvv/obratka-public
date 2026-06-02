@@ -5,8 +5,12 @@ using ProcessingGateway.Domain;
 
 namespace ProcessingGateway.Infrastructure.Database;
 
-/// Bulk-INSERT LLM-результатов в `review_llm_results` (schema 2.0).
-/// Идемпотентность через UNIQUE `(review_id, analysis_job_id)` + `ON CONFLICT DO NOTHING`.
+/// Bulk-UPSERT LLM-результатов в `review_llm_results` (schema 2.0).
+/// UNIQUE `(review_id, analysis_job_id)` + `ON CONFLICT DO UPDATE`: повторный прогон LLM по
+/// тому же job-у (цикл live-мониторинга — модель «растущий seed-job») ОСВЕЖАЕТ разметку всех
+/// отзывов (sentiment/confidence/aspects/processed_at), а не пропускает уже размеченные.
+/// Остаётся идемпотентным: повторное применение того же output даёт тот же результат.
+/// Сырьё `reviews` при этом не трогаем — там append-only (`ON CONFLICT (composite_key) DO NOTHING`).
 ///
 /// `aspects` — JSONB; пишется как сериализованный list&lt;ReviewAspect&gt; в snake_case
 /// (тот же JsonOptions, что в `ProcessingDbContext.JsonStringConverter`, чтобы EF при чтении
@@ -34,7 +38,11 @@ public sealed class ReviewLlmResultBulkInserter
         ) AS t(
             review_id, analysis_job_id, overall_sentiment, overall_confidence, aspects
         )
-        ON CONFLICT (review_id, analysis_job_id) DO NOTHING;";
+        ON CONFLICT (review_id, analysis_job_id) DO UPDATE SET
+            overall_sentiment  = EXCLUDED.overall_sentiment,
+            overall_confidence = EXCLUDED.overall_confidence,
+            aspects            = EXCLUDED.aspects,
+            processed_at       = EXCLUDED.processed_at;";
 
     public async Task<int> InsertAsync(
         Guid analysisJobId,
