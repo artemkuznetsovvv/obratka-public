@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { ArrowRight, X } from 'lucide-react'
+import { ArrowRight, Loader2, X } from 'lucide-react'
 import { AppLayout } from '@/layouts/AppLayout'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -467,6 +467,7 @@ export default function NewAnalysisPage() {
                 Отмена
               </Button>
               <Button type="submit" disabled={saveMutation.isPending} className="gap-2">
+                {saveMutation.isPending && <Loader2 size={18} className="animate-spin" />}
                 {saveMutation.isPending
                   ? fromId
                     ? 'Сохраняем…'

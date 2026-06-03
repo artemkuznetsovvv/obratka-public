@@ -702,10 +702,12 @@ function UnmatchedCardRow({
         {meta.label}
       </span>
       <div className="flex-1 min-w-0">
-        <div className="text-sm text-text-primary truncate">{card.name}</div>
-        {card.address && (
-          <div className="text-xs text-text-tertiary truncate">{card.address}</div>
-        )}
+        {/* Адрес — главный идентификатор (как в сгруппированных блоках): у разных точек
+            часто одинаковое название, различает только адрес. Имя — вторично. */}
+        <div className="text-sm text-text-primary truncate">
+          {card.address || <span className="italic text-text-tertiary">Адрес не указан</span>}
+        </div>
+        <div className="text-xs text-text-tertiary truncate">{card.name}</div>
       </div>
       {card.rating !== null && (
         <div className="hidden sm:flex items-center gap-1 text-sm text-text-secondary shrink-0">
