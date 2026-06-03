@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label'
 import { Card } from '@/components/ui/card'
 import { useAuth } from '@/auth/AuthContext'
 import { cn } from '@/lib/utils'
+import { ForgotPasswordDialog } from './ForgotPasswordDialog'
 
 const loginSchema = z.object({
   email: z.string({ required_error: 'Введите email' }).min(1, 'Введите email').email('Введите корректный email'),
@@ -71,11 +72,12 @@ function UnderlineTab({ value, children }: { value: string; children: React.Reac
 
 function LoginForm({ onSuccess }: { onSuccess: () => void }) {
   const { login } = useAuth()
-  const [showPassword, setShowPassword] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [forgotOpen, setForgotOpen] = useState(false)
   const {
     register,
     handleSubmit,
+    getValues,
     formState: { errors, isSubmitting },
   } = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
@@ -106,36 +108,23 @@ function LoginForm({ onSuccess }: { onSuccess: () => void }) {
         {...register('email')}
       />
 
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <Label htmlFor="login-password" className="text-caption uppercase text-text-secondary">Пароль</Label>
-          <button type="button" className="text-caption uppercase text-brand hover:underline">
-            Забыли пароль?
-          </button>
-        </div>
-        <div className="relative">
-          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary">
-            <Lock size={18} />
-          </span>
-          <Input
-            id="login-password"
-            type={showPassword ? 'text' : 'password'}
-            autoComplete="current-password"
-            placeholder="••••••••"
-            className="pl-10 pr-12 h-12"
-            {...register('password')}
-          />
+      <PasswordField
+        id="login-password"
+        label="Пароль"
+        autoComplete="current-password"
+        placeholder="••••••••"
+        error={errors.password?.message}
+        rightLabel={
           <button
             type="button"
-            onClick={() => setShowPassword((v) => !v)}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-secondary"
-            aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'}
+            onClick={() => setForgotOpen(true)}
+            className="text-caption uppercase text-brand hover:underline"
           >
-            {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            Забыли пароль?
           </button>
-        </div>
-        {errors.password?.message && <p className="text-xs text-destructive">{errors.password.message}</p>}
-      </div>
+        }
+        {...register('password')}
+      />
 
       {submitError && <p className="text-sm text-destructive">{submitError}</p>}
 
@@ -143,6 +132,12 @@ function LoginForm({ onSuccess }: { onSuccess: () => void }) {
         {isSubmitting ? 'Входим…' : 'Войти'}
         {!isSubmitting && <ArrowRight size={16} />}
       </Button>
+
+      <ForgotPasswordDialog
+        open={forgotOpen}
+        onOpenChange={setForgotOpen}
+        defaultEmail={getValues('email')}
+      />
     </form>
   )
 }
@@ -192,13 +187,11 @@ function RegisterForm({ onSuccess }: { onSuccess: () => void }) {
         error={errors.email?.message}
         {...register('email')}
       />
-      <FieldWithIcon
+      <PasswordField
         id="reg-password"
         label="Пароль"
-        type="password"
         autoComplete="new-password"
         placeholder="Минимум 8 символов"
-        icon={<Lock size={18} />}
         error={errors.password?.message}
         {...register('password')}
       />
@@ -239,6 +232,51 @@ const FieldWithIcon = forwardRef<HTMLInputElement, FieldWithIconProps>(
   ),
 )
 FieldWithIcon.displayName = 'FieldWithIcon'
+
+// Поле пароля с иконкой замка и кнопкой показать/скрыть (глаз). Используется и во входе,
+// и в регистрации. rightLabel — опц. слот справа от лейбла (напр. ссылка «Забыли пароль?»).
+interface PasswordFieldProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  id: string
+  label: string
+  error?: string
+  rightLabel?: React.ReactNode
+}
+
+const PasswordField = forwardRef<HTMLInputElement, PasswordFieldProps>(
+  ({ id, label, error, rightLabel, className, ...inputProps }, ref) => {
+    const [show, setShow] = useState(false)
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label htmlFor={id} className="text-caption uppercase text-text-secondary">{label}</Label>
+          {rightLabel}
+        </div>
+        <div className="relative">
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary">
+            <Lock size={18} />
+          </span>
+          <Input
+            id={id}
+            ref={ref}
+            className={cn('pl-10 pr-12 h-12', className)}
+            {...inputProps}
+            type={show ? 'text' : 'password'}
+          />
+          <button
+            type="button"
+            onClick={() => setShow((v) => !v)}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-secondary"
+            aria-label={show ? 'Скрыть пароль' : 'Показать пароль'}
+          >
+            {show ? <EyeOff size={18} /> : <Eye size={18} />}
+          </button>
+        </div>
+        {error && <p className="text-xs text-destructive">{error}</p>}
+      </div>
+    )
+  },
+)
+PasswordField.displayName = 'PasswordField'
 
 function extractErrorMessage(err: unknown, fallback: string): string {
   if (typeof err === 'object' && err !== null && 'response' in err) {

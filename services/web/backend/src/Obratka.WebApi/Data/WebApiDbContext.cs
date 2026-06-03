@@ -7,6 +7,7 @@ using Obratka.WebApi.Auth;
 using Obratka.WebApi.Companies;
 using Obratka.WebApi.Geo;
 using Obratka.WebApi.Monitoring;
+using Obratka.WebApi.Support;
 
 namespace Obratka.WebApi.Data;
 
@@ -21,6 +22,7 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
     public DbSet<CityReference> Cities => Set<CityReference>();
     public DbSet<MonitoringConfig> MonitoringConfigs => Set<MonitoringConfig>();
     public DbSet<MonitoringCycle> MonitoringCycles => Set<MonitoringCycle>();
+    public DbSet<UserRequest> UserRequests => Set<UserRequest>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -173,6 +175,18 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
                         v => v));
             b.HasIndex(x => x.MonitoringId);
             b.HasIndex(x => new { x.MonitoringId, x.CycleNumber }).IsUnique();
+        });
+
+        builder.Entity<UserRequest>(b =>
+        {
+            b.ToTable("user_requests");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Type).HasConversion<string>().HasMaxLength(32).IsRequired();
+            b.Property(x => x.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+            b.Property(x => x.Email).HasMaxLength(256).IsRequired();
+            b.Property(x => x.Message).HasMaxLength(2000);
+            b.HasIndex(x => x.Status);
+            b.HasIndex(x => x.CreatedAt);
         });
     }
 

@@ -24,6 +24,40 @@ export const adminUsersApi = {
 
   unblock: (id: string) =>
     http.post<AdminUserListItem>(`/api/admin/users/${id}/unblock`).then((r) => r.data),
+
+  setPassword: (id: string, newPassword: string) =>
+    http.post<void>(`/api/admin/users/${id}/set-password`, { newPassword }).then((r) => r.data),
+}
+
+// ----- User requests (борда обращений: сброс пароля и т.п.) -----
+export type UserRequestStatus = 'new' | 'resolved'
+
+export interface AdminUserRequest {
+  id: string
+  type: string // passwordreset
+  email: string
+  userId: string | null
+  message: string | null
+  status: UserRequestStatus
+  createdAt: string
+  resolvedAt: string | null
+}
+
+export interface AdminUserRequestListResponse {
+  newCount: number
+  items: AdminUserRequest[]
+}
+
+export const adminUserRequestsApi = {
+  list: (status?: UserRequestStatus) =>
+    http
+      .get<AdminUserRequestListResponse>('/api/admin/user-requests', {
+        params: status ? { status } : undefined,
+      })
+      .then((r) => r.data),
+
+  resolve: (id: string) =>
+    http.post<void>(`/api/admin/user-requests/${id}/resolve`).then((r) => r.data),
 }
 
 // ----- Proxies (mirror Parser-Service DTO) -----

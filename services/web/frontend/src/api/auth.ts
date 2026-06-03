@@ -36,4 +36,10 @@ export const authApi = {
   logout: () => http.post<void>('/api/auth/logout').then((r) => r.data),
 
   me: () => http.get<UserInfo>('/api/auth/me').then((r) => r.data),
+
+  // «Забыли пароль» без email-флоу: фиксируем обращение в борду админки.
+  passwordResetRequest: (email: string, message?: string) =>
+    http
+      .post<{ ok: boolean }>('/api/auth/password-reset-request', { email, message })
+      .then((r) => r.data),
 }

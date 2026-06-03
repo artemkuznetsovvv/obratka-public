@@ -1,8 +1,11 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Obratka.WebApi.Auth;
 using Obratka.WebApi.Contracts.Auth;
+using Obratka.WebApi.Data;
+using Obratka.WebApi.Support;
 
 namespace Obratka.WebApi.Controllers;
 
@@ -14,6 +17,7 @@ public sealed class AuthController(
     IJwtTokenService jwt,
     IRefreshTokenStore refreshStore,
     RefreshCookie refreshCookie,
+    WebApiDbContext db,
     ILogger<AuthController> logger) : ControllerBase
 {
     [HttpPost("register")]
@@ -38,6 +42,46 @@ public sealed class AuthController(
 
         await userManager.AddToRoleAsync(user, Roles.User);
         return await IssueTokensAsync(user, ct);
+    }
+
+    // «Забыли пароль» без email-флоу: фиксируем обращение в борду админки.
+    // Админ меняет пароль вручную (см. AdminUsersController.SetPassword) и уведомляет пользователя.
+    // Анонимно: пользователь не залогинен. Всегда 200 — не палим, существует ли аккаунт.
+    [HttpPost("password-reset-request")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> PasswordResetRequest(
+        [FromBody] PasswordResetRequestRequest request, CancellationToken ct)
+    {
+        var email = request.Email?.Trim();
+        if (string.IsNullOrWhiteSpace(email))
+            return BadRequest(new { error = "Введите email" });
+
+        var user = await userManager.FindByEmailAsync(email);
+
+        // Анти-спам/идемпотентность: не плодим дубли, пока есть необработанный запрос с этого email.
+        var hasPending = await db.UserRequests.AnyAsync(r =>
+            r.Type == UserRequestType.PasswordReset
+            && r.Status == UserRequestStatus.New
+            && r.Email == email, ct);
+
+        if (!hasPending)
+        {
+            db.UserRequests.Add(new UserRequest
+            {
+                Type = UserRequestType.PasswordReset,
+                Email = email,
+                UserId = user?.Id,
+                Message = string.IsNullOrWhiteSpace(request.Message) ? null : request.Message.Trim(),
+                Status = UserRequestStatus.New,
+            });
+            await db.SaveChangesAsync(ct);
+            logger.LogInformation(
+                "Password-reset request recorded for {Email} (userFound={Found})", email, user is not null);
+        }
+
+        return Ok(new { ok = true });
     }
 
     [HttpPost("login")]

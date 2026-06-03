@@ -1,14 +1,17 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Ban, CheckCircle2 } from 'lucide-react'
+import { Ban, CheckCircle2, KeyRound } from 'lucide-react'
 import { AppLayout } from '@/layouts/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { adminUsersApi } from '@/api/admin'
+import { adminUsersApi, type AdminUserListItem } from '@/api/admin'
+import { SetPasswordDialog } from './SetPasswordDialog'
 
 export default function UsersPage() {
   const queryClient = useQueryClient()
+  const [pwdUser, setPwdUser] = useState<AdminUserListItem | null>(null)
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['admin', 'users'],
     queryFn: () => adminUsersApi.list({ limit: 100 }),
@@ -79,27 +82,38 @@ export default function UsersPage() {
                     {new Date(user.createdAt).toLocaleDateString('ru-RU')}
                   </TableCell>
                   <TableCell className="text-right">
-                    {user.isBlocked ? (
+                    <div className="inline-flex items-center gap-2">
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => unblockMutation.mutate(user.id)}
-                        disabled={unblockMutation.isPending}
+                        className="gap-1"
+                        onClick={() => setPwdUser(user)}
                       >
-                        <CheckCircle2 size={14} />
-                        Разблокировать
+                        <KeyRound size={14} />
+                        Пароль
                       </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => blockMutation.mutate(user.id)}
-                        disabled={blockMutation.isPending}
-                      >
-                        <Ban size={14} />
-                        Заблокировать
-                      </Button>
-                    )}
+                      {user.isBlocked ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => unblockMutation.mutate(user.id)}
+                          disabled={unblockMutation.isPending}
+                        >
+                          <CheckCircle2 size={14} />
+                          Разблокировать
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => blockMutation.mutate(user.id)}
+                          disabled={blockMutation.isPending}
+                        >
+                          <Ban size={14} />
+                          Заблокировать
+                        </Button>
+                      )}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -107,6 +121,15 @@ export default function UsersPage() {
           </Table>
         )}
       </Card>
+
+      {pwdUser && (
+        <SetPasswordDialog
+          open
+          onOpenChange={(o) => !o && setPwdUser(null)}
+          userId={pwdUser.id}
+          userEmail={pwdUser.email}
+        />
+      )}
     </AppLayout>
   )
 }

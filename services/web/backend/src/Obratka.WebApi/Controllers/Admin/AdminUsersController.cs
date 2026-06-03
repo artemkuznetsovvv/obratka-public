@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Obratka.WebApi.Auth;
 using Obratka.WebApi.Contracts.Admin;
 using Obratka.WebApi.Data;
+using Obratka.WebApi.Support;
 
 namespace Obratka.WebApi.Controllers.Admin;
 
@@ -69,5 +70,28 @@ public sealed class AdminUsersController(
         logger.LogInformation("User {UserId} unblocked by admin {AdminId}", id, userManager.GetUserId(User));
         var roles = await userManager.GetRolesAsync(user);
         return Ok(new AdminUserListItem(user.Id, user.Email ?? string.Empty, user.FullName, user.IsBlocked, roles.ToList(), user.CreatedAt));
+    }
+
+    // Ручная смена пароля пользователю админом (флоу «Забыли пароль» без email).
+    // Сбрасываем активные refresh-токены — пользователь перелогинится с новым паролем.
+    [HttpPost("{id:guid}/set-password")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> SetPassword(Guid id, [FromBody] AdminSetPasswordRequest request, CancellationToken ct)
+    {
+        var user = await userManager.FindByIdAsync(id.ToString());
+        if (user is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(request.NewPassword))
+            return BadRequest(new { error = "Введите новый пароль" });
+
+        var token = await userManager.GeneratePasswordResetTokenAsync(user);
+        var result = await userManager.ResetPasswordAsync(user, token, request.NewPassword);
+        if (!result.Succeeded)
+            return BadRequest(new { error = string.Join("; ", result.Errors.Select(e => e.Description)) });
+
+        await refreshStore.RevokeAllForUserAsync(id, ct);
+        logger.LogInformation("Password set for user {UserId} by admin {AdminId}", id, userManager.GetUserId(User));
+        return NoContent();
     }
 }
