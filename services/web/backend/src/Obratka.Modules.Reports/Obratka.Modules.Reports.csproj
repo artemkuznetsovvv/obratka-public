@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\Obratka.Shared\Obratka.Shared.csproj" />
@@ -6,6 +6,16 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
+    <PackageReference Include="QuestPDF" Version="2024.12.3" />
+    <!-- Web API рантайм — Alpine/musl. NoDependencies-вариант несёт musl-x64 нативку
+         libSkiaSharp и НЕ линкует fontconfig: системные шрифты не читаются, поэтому
+         шрифт регистрируем из embedded TTF (Fonts/*.ttf) — одинаково на Windows и в контейнере. -->
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="2.88.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Fonts\PTSans-Regular.ttf" />
+    <EmbeddedResource Include="Fonts\PTSans-Bold.ttf" />
   </ItemGroup>
 
   <PropertyGroup>

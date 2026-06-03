@@ -132,6 +132,12 @@ builder.Services.AddAnalyticsModule(builder.Configuration);
 builder.Services.AddReportsModule();
 builder.Services.AddNotificationsModule();
 
+// Сборщик данных PDF-отчёта. Через ActivatorUtilities: опциональные метрик-сервисы
+// Analytics не зарегистрированы при пустом ProcessingReadDb — default-параметры дадут
+// null (assembler.IsAvailable=false → 503), а не падение DI.
+builder.Services.AddScoped<Obratka.WebApi.Reports.ReportDataAssembler>(sp =>
+    ActivatorUtilities.CreateInstance<Obratka.WebApi.Reports.ReportDataAssembler>(sp));
+
 // ---- Live-мониторинг (ADR-005) ----
 builder.Services.AddScoped<IMonitoringScheduler, MonitoringScheduler>();
 // Runner резолвим через ActivatorUtilities: опциональные Analytics-сервисы (stats/recommendations)

@@ -2,5 +2,7 @@ namespace Obratka.Modules.Reports;
 
 public interface IReportsModule
 {
-    Task<string> GenerateReportAsync(Guid analysisJobId, Guid companyId, CancellationToken ct);
+    // Синхронный рендер: QuestPDF.GeneratePdf() — CPU-bound, без I/O.
+    // На вход — уже собранная модель (числа посчитаны в Web API из метрик-сервисов).
+    byte[] Render(ReportDocumentModel model);
 }

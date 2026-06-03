@@ -1,7 +1,12 @@
+using QuestPDF.Fluent;
+
 namespace Obratka.Modules.Reports;
 
 internal sealed class ReportsModule : IReportsModule
 {
-    public Task<string> GenerateReportAsync(Guid analysisJobId, Guid companyId, CancellationToken ct)
-        => throw new NotImplementedException();
+    public byte[] Render(ReportDocumentModel model)
+    {
+        ReportPdfBootstrap.EnsureInitialized();
+        return new ReportPdfDocument(model).GeneratePdf();
+    }
 }

@@ -11,6 +11,7 @@ import {
   Clock,
   Download,
   Layers,
+  Loader2,
   MapPin,
 } from 'lucide-react'
 import { AppLayout } from '@/layouts/AppLayout'
@@ -18,6 +19,8 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { dashboardsApi, type DashboardHeaderDto } from '@/api/dashboards'
+import { reportsApi } from '@/api/reports'
+import { saveBlob } from '@/api/download'
 import {
   monitoringsApi,
   MONITORING_STATUS_LABEL,
@@ -166,6 +169,7 @@ function DashboardHeader({ data }: { data: DashboardHeaderDto }) {
   const { user } = useAuth()
   const isAdmin = user?.roles.includes('Admin') ?? false
   const [monitorOpen, setMonitorOpen] = useState(false)
+  const filters = useDashboardFilters()
 
   const createMonitoring = useMutation({
     mutationFn: monitoringsApi.create,
@@ -173,6 +177,24 @@ function DashboardHeader({ data }: { data: DashboardHeaderDto }) {
       setMonitorOpen(false)
       navigate('/monitoring')
     },
+  })
+
+  // PDF строится по текущим фильтрам дашборда. Если фильтр «Филиал» снят со всех —
+  // откатываемся ко всем филиалам джоба (иначе бэк вернёт 400 на пустой branchIds).
+  const downloadPdf = useMutation({
+    mutationFn: () =>
+      reportsApi.download(data.jobId, {
+        branchIds:
+          filters.branches.length > 0
+            ? filters.branches
+            : data.branches.map((b) => b.branchId),
+        from: filters.periodFrom,
+        to: filters.periodTo,
+        sources: filters.sources,
+        sentiments: filters.sentiments,
+        stars: filters.stars,
+      }),
+    onSuccess: ({ blob, fileName }) => saveBlob(blob, fileName),
   })
 
   const periodLabel = useMemo(() => {
@@ -211,9 +233,19 @@ function DashboardHeader({ data }: { data: DashboardHeaderDto }) {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          <Button variant="outline" size="sm" disabled className="gap-2" title="Будет в отдельной задаче">
-            <Download size={14} />
-            Скачать PDF
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            disabled={downloadPdf.isPending}
+            onClick={() => downloadPdf.mutate()}
+          >
+            {downloadPdf.isPending ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <Download size={14} />
+            )}
+            {downloadPdf.isPending ? 'Готовим PDF…' : 'Скачать PDF'}
           </Button>
           <Button
             variant="outline"
@@ -228,6 +260,12 @@ function DashboardHeader({ data }: { data: DashboardHeaderDto }) {
           </Button>
         </div>
       </div>
+
+      {downloadPdf.isError && (
+        <div className="mb-3 text-xs text-destructive">
+          Не удалось сформировать PDF. Попробуйте ещё раз.
+        </div>
+      )}
 
       <MonitoringConfigDialog
         open={monitorOpen}

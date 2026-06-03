@@ -27,7 +27,10 @@ WORKDIR /app
 #               .NET с DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=false фейлит на старте.
 # icu-data-full — полные локали (нужно для нормализации/сравнения русских строк).
 # tini        — корректный PID1 для проксирования сигналов.
-RUN apk add --no-cache tini icu-libs icu-data-full
+# fontconfig  — нужен SkiaSharp (QuestPDF/PDF-отчёты) для инициализации шрифтовой
+#               подсистемы на Linux. Сам шрифт embedded (PT Sans в Obratka.Modules.Reports),
+#               системные шрифты не используем, но libfontconfig библиотека должна быть.
+RUN apk add --no-cache tini icu-libs icu-data-full fontconfig
 USER app
 
 COPY --from=build --chown=app:app /app/publish .

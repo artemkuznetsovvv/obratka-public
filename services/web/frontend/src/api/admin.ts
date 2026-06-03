@@ -1,4 +1,5 @@
 import { http } from './http'
+import { parseContentDispositionFilename } from './download'
 
 // ----- Users -----
 export interface AdminUserListItem {
@@ -247,20 +248,9 @@ export const adminAnalysesApi = {
       responseType: 'blob',
     })
     const disposition = response.headers['content-disposition'] as string | undefined
-    const fileName = parseFileName(disposition) ?? `${jobId}-${name.replace('/', '-')}.json`
+    const fileName = parseContentDispositionFilename(disposition) ?? `${jobId}-${name.replace('/', '-')}.json`
     return { blob: response.data, fileName }
   },
-}
-
-function parseFileName(disposition: string | undefined): string | null {
-  if (!disposition) return null
-  // matches filename*=UTF-8''...  OR  filename="..."  OR  filename=...
-  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(disposition)
-  if (utf8) return decodeURIComponent(utf8[1])
-  const quoted = /filename="([^"]+)"/i.exec(disposition)
-  if (quoted) return quoted[1]
-  const bare = /filename=([^;]+)/i.exec(disposition)
-  return bare ? bare[1].trim() : null
 }
 
 // ----- Companies (admin registry) -----
