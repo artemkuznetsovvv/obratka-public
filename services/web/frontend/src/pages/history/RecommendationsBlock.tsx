@@ -39,6 +39,10 @@ export function RecommendationsBlock({ jobId }: { jobId: string }) {
     )
   }
 
+  // Глобальная группировка по приоритету: Высокий → Средний → Низкий.
+  // Внутри группы порядок сохраняется (бэк отдаёт sort_order ASC).
+  const groups = groupByPriority(items)
+
   return (
     <div className="rounded-xl border border-border-subtle bg-page-bg/40 p-4">
       <div className="flex items-center gap-2 mb-3 text-xs uppercase tracking-wide text-text-tertiary">
@@ -48,31 +52,64 @@ export function RecommendationsBlock({ jobId }: { jobId: string }) {
           · {items.length}
         </span>
       </div>
-      <ul className="space-y-2.5">
-        {items.map((r) => (
-          <RecommendationItem key={r.id} rec={r} />
+      <div className="space-y-5">
+        {groups.map((g) => (
+          <div key={g.priority}>
+            <div className="flex items-center gap-2 mb-2">
+              <span
+                className={cn(
+                  'inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border',
+                  g.meta.badgeClass,
+                )}
+              >
+                {g.meta.label}
+              </span>
+              <span className="text-[11px] text-text-tertiary">
+                {g.items.length}
+              </span>
+            </div>
+            <ul className="space-y-2.5">
+              {g.items.map((r) => (
+                <RecommendationItem key={r.id} rec={r} />
+              ))}
+            </ul>
+          </div>
         ))}
-      </ul>
+      </div>
     </div>
   )
 }
 
+interface PriorityGroup {
+  priority: number
+  meta: { label: string; badgeClass: string }
+  items: RecommendationDto[]
+}
+
+function groupByPriority(items: RecommendationDto[]): PriorityGroup[] {
+  return [1, 2, 3]
+    .map((priority) => ({
+      priority,
+      meta: PRIORITY_META[priority],
+      items: items.filter((r) => normalizePriority(r.priority) === priority),
+    }))
+    .filter((g) => g.items.length > 0)
+}
+
+// Приоритеты вне 1..3 (на случай дрейфа контракта LLM) сводим к «низкому»,
+// чтобы рекомендация не потерялась — RecommendationItem делает то же для бейджа.
+function normalizePriority(p: number): 1 | 2 | 3 {
+  return p === 1 || p === 2 ? p : 3
+}
+
 function RecommendationItem({ rec }: { rec: RecommendationDto }) {
   const [evidenceOpen, setEvidenceOpen] = useState(false)
-  const meta = PRIORITY_META[rec.priority] ?? PRIORITY_META[3]
 
+  // Приоритет вынесен в заголовок группы (groupByPriority), поэтому на карточке
+  // оставляем только тему — иначе бейдж дублировался бы в каждой строке секции.
   return (
     <li className="rounded-xl border border-border-subtle bg-card px-4 py-3">
       <div className="flex items-start gap-2 flex-wrap mb-1.5">
-        <span
-          className={cn(
-            'inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border',
-            meta.badgeClass,
-          )}
-          title={`Приоритет: ${meta.label}`}
-        >
-          {meta.label}
-        </span>
         <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-200">
           {rec.topic}
         </span>

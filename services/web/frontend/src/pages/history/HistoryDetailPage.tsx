@@ -182,12 +182,18 @@ export default function HistoryDetailPage() {
               </div>
             </Card>
 
-            {/* Per-source breakdown */}
+            {/* Сбор отзывов: прогресс по источникам + (когда сбор завершён)
+                разбивка по филиалам — раньше это были две отдельные карточки. */}
             {sourceEntries.length > 0 && (
               <Card className="p-6 mb-6">
                 <div className="text-h3 text-text-primary mb-4 flex items-center gap-2">
-                  <CalendarRange size={16} className="text-text-tertiary" />
-                  Прогресс по источникам
+                  <Layers size={16} className="text-text-tertiary" />
+                  Сбор отзывов
+                </div>
+
+                <div className="text-xs uppercase tracking-wide text-text-tertiary mb-2 flex items-center gap-1">
+                  <CalendarRange size={12} />
+                  По источникам
                 </div>
                 <div className="space-y-4">
                   {sourceEntries.map(([source, entry]) => (
@@ -199,6 +205,13 @@ export default function HistoryDetailPage() {
                   Parser отдаёт значение на уровне всего источника. Запланировано как
                   улучшение парсера.
                 </p>
+
+                {/* Разбивка по филиалам появляется, когда сбор завершён (есть
+                    analysis_job_reviews). Сепаратор рендерит сам BranchStatsBlock,
+                    поэтому при пустых данных он просто исчезает без «висящей» линии. */}
+                {(job.status === 'completed' || job.status === 'partial') && (
+                  <BranchStatsBlock jobId={job.id} companyId={job.companyId} />
+                )}
               </Card>
             )}
 
@@ -241,8 +254,6 @@ export default function HistoryDetailPage() {
                 <div className="mb-4">
                   <RecommendationsBlock jobId={job.id} />
                 </div>
-
-                <BranchStatsBlock jobId={job.id} companyId={job.companyId} />
 
                 <div className="mt-5 flex items-center justify-end gap-3 flex-wrap">
                   <Button
@@ -787,12 +798,18 @@ function BranchStatsBlock({ jobId, companyId }: { jobId: string; companyId: stri
   const grouped = useMemo(() => groupBranchStats(statsQuery.data ?? []), [statsQuery.data])
   // Если job только что вышел в terminal статус — анализ уже сделан, но
   // analysis_job_reviews могло ещё не зафиксироваться сразу. Показываем загрузку.
+  // Сепаратор (mt-5 pt-5 border-t) — часть каждого видимого состояния, чтобы
+  // при grouped.length===0 (return null) не оставалась «висящая» разделительная линия.
   if (statsQuery.isLoading) {
-    return <div className="text-xs text-text-tertiary mt-2">Загружаем разбивку…</div>
+    return (
+      <div className="mt-5 pt-5 border-t border-border-subtle text-xs text-text-tertiary">
+        Загружаем разбивку…
+      </div>
+    )
   }
   if (statsQuery.isError) {
     return (
-      <div className="text-xs text-destructive mt-2">
+      <div className="mt-5 pt-5 border-t border-border-subtle text-xs text-destructive">
         Не удалось получить разбивку по филиалам.
       </div>
     )
@@ -804,7 +821,7 @@ function BranchStatsBlock({ jobId, companyId }: { jobId: string; companyId: stri
   void companyId
 
   return (
-    <div className="mt-2">
+    <div className="mt-5 pt-5 border-t border-border-subtle">
       <div className="text-xs uppercase tracking-wide text-text-tertiary mb-2 flex items-center gap-1">
         <Layers size={12} />
         Собрано по филиалам

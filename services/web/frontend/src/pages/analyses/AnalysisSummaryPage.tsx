@@ -242,9 +242,16 @@ export default function AnalysisSummaryPage() {
                               key={lb.id}
                               className="rounded-xl border border-border-subtle bg-card/60 px-4 py-3"
                             >
-                              <div className="text-sm font-medium text-text-primary">{lb.name}</div>
-                              {lb.address && (
-                                <div className="text-xs text-text-tertiary mt-0.5">{lb.address}</div>
+                              {/* Адрес — главный идентификатор: у сетевых брендов имя
+                                  одинаковое у всех точек, различить можно только улицей
+                                  (тот же приём, что в BranchSearchPage / ParamsBranchRow). */}
+                              <div className="text-sm font-medium text-text-primary">
+                                {lb.address || (
+                                  <span className="italic text-text-tertiary">Адрес не указан</span>
+                                )}
+                              </div>
+                              {lb.name && (
+                                <div className="text-xs text-text-tertiary mt-0.5">{lb.name}</div>
                               )}
                               <div className="mt-2 flex flex-wrap gap-1.5">
                                 {lb.providers
@@ -356,6 +363,10 @@ function groupByCity(branches: LogicalBranchDto[]): CityGroup[] {
     .sort(([a], [b]) => a.localeCompare(b, 'ru'))
     .map(([city, list]) => ({
       city,
-      branches: list.sort((a, b) => a.name.localeCompare(b.name, 'ru')),
+      // Сортируем по адресу — это главный идентификатор в карточке (имя у сетевых
+      // брендов одинаковое у всех точек).
+      branches: list.sort((a, b) =>
+        (a.address || a.name).localeCompare(b.address || b.name, 'ru'),
+      ),
     }))
 }
