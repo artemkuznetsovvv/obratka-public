@@ -33,6 +33,7 @@ export function Sidebar() {
   const { user, logout } = useAuth()
   const isAdmin = user?.roles.includes('Admin') ?? false
   const navigate = useNavigate()
+  const location = useLocation()
 
   // Бейдж непрочитанных запросов пользователей (сброс пароля и т.п.) на пункте «Запросы».
   const requestsQuery = useQuery({
@@ -86,7 +87,15 @@ export function Sidebar() {
           <Plus size={16} />
           Новый анализ
         </Button>
-        <button className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm text-text-secondary hover:bg-page-bg transition-colors">
+        <button
+          onClick={() => navigate('/profile')}
+          className={cn(
+            'w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors',
+            location.pathname === '/profile'
+              ? 'bg-state-active-bg text-brand font-medium'
+              : 'text-text-secondary hover:bg-page-bg hover:text-text-primary',
+          )}
+        >
           <User size={16} />
           <span>Профиль</span>
         </button>

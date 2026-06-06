@@ -1,4 +1,4 @@
-import { Bell, ChevronRight } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 
 interface Breadcrumb {
   label: string
@@ -10,8 +10,10 @@ interface HeaderProps {
 }
 
 export function Header({ breadcrumbs }: HeaderProps) {
+  // Колокольчик уведомлений скрыт: функционала уведомлений пока нет.
+  // Вернём, когда появится (OBR-39 Telegram / in-app).
   return (
-    <header className="sticky top-0 z-10 h-header bg-card border-b border-border-subtle flex items-center justify-between px-6">
+    <header className="sticky top-0 z-10 h-header bg-card border-b border-border-subtle flex items-center px-6">
       <nav className="flex items-center gap-2 text-sm">
         {breadcrumbs.map((bc, idx) => (
           <span key={idx} className="flex items-center gap-2 text-text-secondary">
@@ -22,12 +24,6 @@ export function Header({ breadcrumbs }: HeaderProps) {
           </span>
         ))}
       </nav>
-      <button
-        className="p-2 rounded-md hover:bg-page-bg text-text-secondary"
-        aria-label="Уведомления"
-      >
-        <Bell size={18} />
-      </button>
     </header>
   )
 }

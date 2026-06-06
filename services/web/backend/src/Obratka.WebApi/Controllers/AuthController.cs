@@ -162,6 +162,72 @@ public sealed class AuthController(
         return Ok(new UserInfo(user.Id, user.Email ?? string.Empty, user.FullName, roles.ToList()));
     }
 
+    // Self-service: смена ФИО и/или email на странице профиля.
+    [HttpPut("profile")]
+    [Authorize]
+    [ProducesResponseType(typeof(UserInfo), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<UserInfo>> UpdateProfile([FromBody] UpdateProfileRequest request, CancellationToken ct)
+    {
+        var userId = userManager.GetUserId(User);
+        if (string.IsNullOrEmpty(userId)) return Unauthorized();
+        var user = await userManager.FindByIdAsync(userId);
+        if (user is null) return Unauthorized();
+
+        var newFullName = request.FullName.Trim();
+        var newEmail = request.Email.Trim();
+        if (string.IsNullOrWhiteSpace(newFullName))
+            return BadRequest(new { error = "Введите имя" });
+
+        // Email сменился — проверяем уникальность и обновляем заодно UserName (= email).
+        if (!string.Equals(newEmail, user.Email, StringComparison.OrdinalIgnoreCase))
+        {
+            var existing = await userManager.FindByEmailAsync(newEmail);
+            if (existing is not null && existing.Id != user.Id)
+                return BadRequest(new { error = "Этот email уже занят" });
+
+            var setEmail = await userManager.SetEmailAsync(user, newEmail);
+            if (!setEmail.Succeeded)
+                return BadRequest(new { error = string.Join("; ", setEmail.Errors.Select(e => e.Description)) });
+
+            var setUserName = await userManager.SetUserNameAsync(user, newEmail);
+            if (!setUserName.Succeeded)
+                return BadRequest(new { error = string.Join("; ", setUserName.Errors.Select(e => e.Description)) });
+        }
+
+        user.FullName = newFullName;
+        var update = await userManager.UpdateAsync(user);
+        if (!update.Succeeded)
+            return BadRequest(new { error = string.Join("; ", update.Errors.Select(e => e.Description)) });
+
+        logger.LogInformation("User {UserId} updated own profile", userId);
+        var roles = await userManager.GetRolesAsync(user);
+        return Ok(new UserInfo(user.Id, user.Email ?? string.Empty, user.FullName, roles.ToList()));
+    }
+
+    // Self-service: смена собственного пароля (нужен текущий). JWT остаётся валиден до
+    // истечения — текущую сессию не разлогиниваем (пользователь сам сменил пароль).
+    [HttpPost("change-password")]
+    [Authorize]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request, CancellationToken ct)
+    {
+        var userId = userManager.GetUserId(User);
+        if (string.IsNullOrEmpty(userId)) return Unauthorized();
+        var user = await userManager.FindByIdAsync(userId);
+        if (user is null) return Unauthorized();
+
+        var result = await userManager.ChangePasswordAsync(user, request.CurrentPassword, request.NewPassword);
+        if (!result.Succeeded)
+            return BadRequest(new { error = string.Join("; ", result.Errors.Select(e => e.Description)) });
+
+        logger.LogInformation("User {UserId} changed own password", userId);
+        return NoContent();
+    }
+
     private async Task<ActionResult<AuthResponse>> IssueTokensAsync(ApplicationUser user, CancellationToken ct)
     {
         var roles = await userManager.GetRolesAsync(user);

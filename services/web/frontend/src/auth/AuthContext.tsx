@@ -8,6 +8,8 @@ interface AuthState {
   login: (request: LoginRequest) => Promise<UserInfo>
   register: (request: RegisterRequest) => Promise<UserInfo>
   logout: () => Promise<void>
+  // Обновить пользователя в контексте (после смены профиля), чтобы шапка/сайдбар освежились.
+  updateUser: (user: UserInfo) => void
 }
 
 const AuthContext = createContext<AuthState | null>(null)
@@ -73,9 +75,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearAuth()
   }, [clearAuth])
 
+  const updateUser = useCallback((next: UserInfo) => setUser(next), [])
+
   const value = useMemo<AuthState>(
-    () => ({ user, isLoading, login, register, logout }),
-    [user, isLoading, login, register, logout],
+    () => ({ user, isLoading, login, register, logout, updateUser }),
+    [user, isLoading, login, register, logout, updateUser],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

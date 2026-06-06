@@ -18,6 +18,7 @@ import HistoryDetailPage from '@/pages/history/HistoryDetailPage'
 import DashboardPage from '@/pages/dashboards/DashboardPage'
 import MonitoringListPage from '@/pages/monitoring/MonitoringListPage'
 import MonitoringDetailPage from '@/pages/monitoring/MonitoringDetailPage'
+import ProfilePage from '@/pages/profile/ProfilePage'
 
 export default function App() {
   return (
@@ -70,6 +71,15 @@ export default function App() {
         element={
           <ProtectedRoute>
             <DashboardPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute>
+            <ProfilePage />
           </ProtectedRoute>
         }
       />

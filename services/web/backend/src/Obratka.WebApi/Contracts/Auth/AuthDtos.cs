@@ -21,3 +21,13 @@ public sealed record UserInfo(
     string Email,
     string FullName,
     IReadOnlyList<string> Roles);
+
+// Self-service: пользователь меняет своё ФИО и/или email на странице профиля.
+public sealed record UpdateProfileRequest(
+    [Required, MaxLength(200)] string FullName,
+    [Required, EmailAddress] string Email);
+
+// Self-service смена пароля: нужно знать текущий пароль.
+public sealed record ChangePasswordRequest(
+    [Required] string CurrentPassword,
+    [Required, MinLength(8)] string NewPassword);

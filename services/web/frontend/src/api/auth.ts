@@ -37,6 +37,16 @@ export const authApi = {
 
   me: () => http.get<UserInfo>('/api/auth/me').then((r) => r.data),
 
+  // Профиль: смена ФИО/email. Возвращает обновлённого пользователя.
+  updateProfile: (fullName: string, email: string) =>
+    http.put<UserInfo>('/api/auth/profile', { fullName, email }).then((r) => r.data),
+
+  // Профиль: смена собственного пароля (нужен текущий).
+  changePassword: (currentPassword: string, newPassword: string) =>
+    http
+      .post<void>('/api/auth/change-password', { currentPassword, newPassword })
+      .then((r) => r.data),
+
   // «Забыли пароль» без email-флоу: фиксируем обращение в борду админки.
   passwordResetRequest: (email: string, message?: string) =>
     http
