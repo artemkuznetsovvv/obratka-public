@@ -198,7 +198,7 @@ internal sealed class TelegramUpdateListener(
     // ошибки (SendAdminAlertAsync → все Telegram:AdminChatIds). Доступно только из чатов в AdminChatIds.
     private async Task HandleTestAlertAsync(ITelegramBotClient client, long chatId, CancellationToken ct)
     {
-        if (!options.Value.AdminChatIds.Contains(chatId.ToString()))
+        if (!options.Value.ResolvedAdminChatIds.Contains(chatId.ToString()))
         {
             await client.SendMessage(chatId,
                 "Команда доступна только администратору (этот chat_id не в Telegram:AdminChatIds).",

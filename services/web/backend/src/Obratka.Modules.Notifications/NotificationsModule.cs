@@ -107,7 +107,7 @@ internal sealed class NotificationsModule(
         lines.Add($"event: <code>{Esc(alert.EventId)}</code>");
         var text = string.Join("\n", lines);
 
-        var admins = Opts.AdminChatIds;
+        var admins = Opts.ResolvedAdminChatIds;
         if (bot is null || admins.Count == 0)
         {
             logger.LogWarning(
