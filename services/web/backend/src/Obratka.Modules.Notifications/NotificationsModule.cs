@@ -26,14 +26,9 @@ internal sealed class NotificationsModule(
         DateTimeOffset? periodFrom, DateTimeOffset periodTo,
         IReadOnlyList<string> unavailableSources, CancellationToken ct)
     {
-        // Анти-спам: тихо пропускаем только чистый успех без новинок (success/no_new).
-        // failed/partial всегда доходят до пользователя (ТЗ §2), даже без перечня источников.
-        if (newReviewCount <= 0 && unavailableSources.Count == 0 && status is "success" or "no_new")
-        {
-            logger.LogDebug("[notify:user] cycle no-op (monitoring={MonitoringId}, status={Status}) — skip send",
-                monitoringId, status);
-            return;
-        }
+        // По требованию: КАЖДЫЙ цикл live-мониторинга уведомляет владельца — в т.ч. «новых отзывов нет»
+        // (раньше чистый success/no_new глушился анти-спамом; отключено осознанно). Частоту ограничивают
+        // расписание мониторинга и персональный тумблер NotificationsEnabled; доп. чаты компании — всегда.
 
         UserNotificationTarget? target;
         try
