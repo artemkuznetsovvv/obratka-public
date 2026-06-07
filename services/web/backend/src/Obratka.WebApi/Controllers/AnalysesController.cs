@@ -2,12 +2,11 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Memory;
 using Obratka.Modules.Analytics.Recommendations;
 using Obratka.Modules.Notifications;
 using Obratka.WebApi.Auth;
-using Obratka.WebApi.Companies;
 using Obratka.WebApi.Contracts.Analyses;
+using Obratka.WebApi.Notifications;
 using Obratka.WebApi.Contracts.Dashboards;
 using Obratka.WebApi.Data;
 using Obratka.WebApi.Integration.ProcessingGateway;
@@ -24,12 +23,8 @@ public sealed class AnalysesController(
     UserManager<ApplicationUser> userManager,
     ILogger<AnalysesController> logger,
     INotificationsModule notifications,
-    IMemoryCache cache,
     IRecommendationsService? recommendationsService = null) : ControllerBase
 {
-    // Глобальный гейт для атомарного дедупа admin-алертов по job+status (контроллер транзиентный).
-    private static readonly object AdminAlertDedupGate = new();
-
     // Запуск анализа из мастера (step 3 "Запустить"). Web API сам разбирает группировку
     // из БД и формирует payload для PG, проставляя BranchId=LogicalBranch.Id (физический
     // филиал) во все таргеты — см. обсуждение по ADR-003: в reviews.branch_id ложится
@@ -117,6 +112,15 @@ public sealed class AnalysesController(
                 detail: "Не удалось связаться с Processing Gateway. Проверьте, что стенд поднят.");
         }
 
+        // Трекер для уведомления по готовности (фоновая reconcile-джоба отследит завершение).
+        db.AnalysisNotifications.Add(new AnalysisNotification
+        {
+            JobId = pgResponse.AnalysisJobId,
+            UserId = ownerId.Value,
+            CompanyId = request.CompanyId,
+        });
+        await db.SaveChangesAsync(ct);
+
         var location = $"/api/analyses/{pgResponse.AnalysisJobId}";
         return Accepted(location, new StartAnalysisResponse(pgResponse.AnalysisJobId));
     }
@@ -188,10 +192,6 @@ public sealed class AnalysesController(
         var owns = await db.Companies.AnyAsync(
             c => c.Id == job.CompanyId && c.OwnerUserId == ownerId, ct);
         if (!owns) return NotFound();
-
-        // Лёгкий admin-хук на async-сбой разового анализа: этот эндпоинт фронт уже поллит на
-        // progress-экране. Алертим один раз на job+status (дедуп через IMemoryCache), без поллера.
-        await MaybeAlertAdminOnFailureAsync(job, ownerId.Value, ct);
 
         return Ok(job);
     }
@@ -368,47 +368,8 @@ public sealed class AnalysesController(
         return Guid.TryParse(id, out var g) ? g : null;
     }
 
-    // Один admin-алерт на job+status при терминальной ошибке/частичном сборе разового анализа.
-    private async Task MaybeAlertAdminOnFailureAsync(AnalysisJobDto job, Guid ownerId, CancellationToken ct)
-    {
-        if (job.Status is not ("failed" or "partial")) return;
-
-        // Дедуп «один алерт на job+status»: эндпоинт поллится фронтом, поэтому резервируем ключ
-        // атомарно (TryGetValue+Set под общим lock — обе операции синхронны, без await внутри).
-        var key = $"admin-alert-job-{job.Id}-{job.Status}";
-        lock (AdminAlertDedupGate)
-        {
-            if (cache.TryGetValue(key, out _)) return;
-            cache.Set(key, true, TimeSpan.FromHours(24));
-        }
-
-        var companyName = await db.Companies.AsNoTracking()
-            .Where(c => c.Id == job.CompanyId)
-            .Select(c => c.Name)
-            .FirstOrDefaultAsync(ct);
-
-        var unavailable = job.CollectionProgress
-            .Where(kv => !string.Equals(kv.Value.Status, "completed", StringComparison.OrdinalIgnoreCase))
-            .Select(kv => kv.Value.Error is { Length: > 0 } e
-                ? $"{BranchSources.Label(kv.Key)} ({e})"
-                : BranchSources.Label(kv.Key))
-            .ToList();
-
-        var reason = job.Error
-            ?? (unavailable.Count > 0
-                ? $"Источники с ошибкой: {string.Join("; ", unavailable)}"
-                : $"Анализ завершился со статусом {job.Status}");
-
-        await SafeAdminAlertAsync(
-            stage: job.Status == "failed" ? "Анализ" : "Сбор",
-            reason: reason,
-            userId: ownerId,
-            companyId: job.CompanyId,
-            companyName: companyName,
-            jobId: job.Id,
-            severity: job.Status == "failed" ? "critical" : "warning");
-    }
-
+    // Синхронный admin-алерт при сбое ЗАПУСКА анализа (PG отклонил/недоступен). Async-исходы
+    // (completed/partial/failed) обрабатывает фоновая AnalysisNotificationReconciler.
     private async Task SafeAdminAlertAsync(
         string stage, string reason, Guid? userId, Guid? companyId, string? companyName, Guid? jobId,
         string severity = "critical")

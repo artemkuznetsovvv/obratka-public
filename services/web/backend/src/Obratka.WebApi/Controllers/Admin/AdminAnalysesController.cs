@@ -8,6 +8,7 @@ using Obratka.WebApi.Data;
 // StartAdminAnalysisRequest / RestartSourceAdminRequest from Obratka.WebApi.Contracts.Admin
 using Obratka.WebApi.Integration.ProcessingGateway;
 using Obratka.WebApi.Integration.ProcessingGateway.Contracts;
+using Obratka.WebApi.Notifications;
 
 namespace Obratka.WebApi.Controllers.Admin;
 
@@ -63,6 +64,16 @@ public sealed class AdminAnalysesController(
         var qaRequest = new StartAnalysisQaRequest(
             request.CompanyId, request.DateFrom, request.DateTo, branches);
         var response = await gateway.StartAnalysisAsync(qaRequest, ct);
+
+        // Трекер для уведомления по готовности — получатель владелец компании, не админ.
+        db.AnalysisNotifications.Add(new AnalysisNotification
+        {
+            JobId = response.AnalysisJobId,
+            UserId = company.OwnerUserId,
+            CompanyId = request.CompanyId,
+        });
+        await db.SaveChangesAsync(ct);
+
         return Accepted($"/api/admin/analyses/{response.AnalysisJobId}", response);
     }
 

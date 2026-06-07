@@ -21,6 +21,14 @@ public interface INotificationsModule
         IReadOnlyList<string> unavailableSources,
         CancellationToken ct);
 
+    // «Разовый анализ готов» — пользователю-владельцу (вне мониторинга, по завершению analysis_job).
+    Task SendAnalysisReadyAsync(
+        Guid userId,
+        Guid jobId,
+        string companyName,
+        int reviewCount,
+        CancellationToken ct);
+
     // «Резкий рост негатива» — пользователю (ТЗ §6).
     Task SendNegativeSentimentAlertAsync(
         Guid userId,

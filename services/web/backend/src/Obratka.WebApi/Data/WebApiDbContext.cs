@@ -25,6 +25,7 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
     public DbSet<MonitoringCycle> MonitoringCycles => Set<MonitoringCycle>();
     public DbSet<UserRequest> UserRequests => Set<UserRequest>();
     public DbSet<TelegramLinkToken> TelegramLinkTokens => Set<TelegramLinkToken>();
+    public DbSet<AnalysisNotification> AnalysisNotifications => Set<AnalysisNotification>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -199,6 +200,15 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
                 .WithMany()
                 .HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<AnalysisNotification>(b =>
+        {
+            b.ToTable("analysis_notifications");
+            b.HasKey(x => x.Id);
+            b.HasIndex(x => x.JobId).IsUnique();
+            // Частичный индекс под выборку «ещё не уведомлённых» в reconcile-джобе.
+            b.HasIndex(x => x.NotifiedAt).HasFilter("\"NotifiedAt\" IS NULL");
         });
 
         builder.Entity<UserRequest>(b =>

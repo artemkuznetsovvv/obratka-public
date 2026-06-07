@@ -69,6 +69,37 @@ internal sealed class NotificationsModule(
             "cycle-result", monitoringId.ToString("N"), ct);
     }
 
+    public async Task SendAnalysisReadyAsync(
+        Guid userId, Guid jobId, string companyName, int reviewCount, CancellationToken ct)
+    {
+        string? chatId;
+        try
+        {
+            chatId = await recipients.ResolveChatIdAsync(userId, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[notify:user] resolve chatId failed (analysis-ready, user={UserId})", userId);
+            return;
+        }
+
+        if (bot is null || string.IsNullOrWhiteSpace(chatId))
+        {
+            logger.LogInformation(
+                "[notify:user] канал недоступен (analysis-ready, job={JobId}, linked={Linked}, botEnabled={BotEnabled}) — skip",
+                jobId, !string.IsNullOrWhiteSpace(chatId), bot is not null);
+            return;
+        }
+
+        var text =
+            $"<b>✅ Анализ готов — {Esc(companyName)}</b>\n" +
+            $"Собрано отзывов: {reviewCount}";
+
+        await SendRawAsync(
+            chatId, text, DashboardButtonForPath($"/history/{jobId}/dashboard"),
+            "analysis-ready", jobId.ToString("N"), ct);
+    }
+
     public async Task SendNegativeSentimentAlertAsync(
         Guid userId, Guid monitoringId, double previousNegativePp, double currentNegativePp,
         int newReviewCount, CancellationToken ct)
@@ -206,20 +237,23 @@ internal sealed class NotificationsModule(
     }
 
     private InlineKeyboardMarkup? DashboardButton(Guid seedJobId, Guid monitoringId)
+        => DashboardButtonForPath($"/history/{seedJobId}/dashboard?monitoring={monitoringId}");
+
+    // Кнопка «Открыть дашборд» на относительном пути. Telegram требует валидный абсолютный
+    // http(s) URL для inline-кнопки; иначе ВЕСЬ SendMessage упадёт (BUTTON_URL_INVALID) — поэтому
+    // при мисконфиге base-url деградируем (сообщение без кнопки), не роняя доставку.
+    private InlineKeyboardMarkup? DashboardButtonForPath(string path)
     {
         var baseUrl = Opts.DashboardBaseUrl?.Trim();
         if (string.IsNullOrWhiteSpace(baseUrl)) return null;
         var trimmed = baseUrl.TrimEnd('/');
-        // Telegram требует валидный абсолютный http(s) URL для inline-кнопки; иначе ВЕСЬ SendMessage
-        // упадёт (BUTTON_URL_INVALID). При мисконфиге деградируем (сообщение без кнопки), не роняя доставку.
         if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var u)
             || (u.Scheme != Uri.UriSchemeHttp && u.Scheme != Uri.UriSchemeHttps))
         {
             logger.LogWarning("[telegram] DashboardBaseUrl невалиден ('{BaseUrl}') — кнопка дашборда пропущена", baseUrl);
             return null;
         }
-        var url = $"{trimmed}/history/{seedJobId}/dashboard?monitoring={monitoringId}";
-        return new InlineKeyboardMarkup(InlineKeyboardButton.WithUrl("📊 Открыть дашборд", url));
+        return new InlineKeyboardMarkup(InlineKeyboardButton.WithUrl("📊 Открыть дашборд", $"{trimmed}{path}"));
     }
 
     private static string Esc(string s) => WebUtility.HtmlEncode(s);

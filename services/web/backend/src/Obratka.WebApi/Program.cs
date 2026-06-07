@@ -158,6 +158,10 @@ builder.Services.AddScoped<IMonitoringScheduler, MonitoringScheduler>();
 builder.Services.AddScoped<IMonitoringCycleRunner>(sp =>
     ActivatorUtilities.CreateInstance<MonitoringCycleRunner>(sp));
 
+// Уведомления по разовым анализам: фоновая reconcile-джоба отслеживает запущенные анализы
+// и шлёт пинг по готовности (готово — пользователю, ошибка — админу) независимо от UI.
+builder.Services.AddScoped<IAnalysisNotificationReconciler, AnalysisNotificationReconciler>();
+
 // ---- Parser-Service HTTP client ----
 builder.Services.AddTransient<ParserApiKeyHandler>();
 builder.Services.AddHttpClient<IParserServiceClient, ParserServiceClient>((sp, http) =>
@@ -219,6 +223,13 @@ using (var scope = app.Services.CreateScope())
 {
     var scheduler = scope.ServiceProvider.GetRequiredService<IMonitoringScheduler>();
     scheduler.EnsureReconcileJob();
+
+    // Recurring-джоба уведомлений по разовым анализам (каждую минуту, UTC).
+    scope.ServiceProvider.GetRequiredService<IRecurringJobManager>().AddOrUpdate<IAnalysisNotificationReconciler>(
+        "analysis-notify-reconcile",
+        r => r.ReconcileAsync(),
+        "* * * * *",
+        new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
 
     var db = scope.ServiceProvider.GetRequiredService<WebApiDbContext>();
     var active = await db.MonitoringConfigs

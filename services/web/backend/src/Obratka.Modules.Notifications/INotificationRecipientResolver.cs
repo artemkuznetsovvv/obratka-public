@@ -7,6 +7,10 @@ namespace Obratka.Modules.Notifications;
 public interface INotificationRecipientResolver
 {
     Task<UserNotificationTarget?> ResolveUserAsync(Guid userId, Guid monitoringId, CancellationToken ct);
+
+    // Telegram chat_id пользователя (или null, если не привязан) — для уведомлений вне мониторинга
+    // (напр. «разовый анализ готов»), где нет monitoringId/подписки.
+    Task<string?> ResolveChatIdAsync(Guid userId, CancellationToken ct);
 }
 
 // Канало-нейтральный получатель + контекст для сборки сообщения.

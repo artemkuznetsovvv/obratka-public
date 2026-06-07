@@ -30,4 +30,10 @@ internal sealed class WebApiNotificationRecipientResolver(WebApiDbContext db) : 
 
         return new UserNotificationTarget(chatId, cfg.NotificationsEnabled, cfg.SeedJobId, companyName);
     }
+
+    public async Task<string?> ResolveChatIdAsync(Guid userId, CancellationToken ct)
+        => await db.Users.AsNoTracking()
+            .Where(u => u.Id == userId)
+            .Select(u => u.TelegramChatId)
+            .FirstOrDefaultAsync(ct);
 }
