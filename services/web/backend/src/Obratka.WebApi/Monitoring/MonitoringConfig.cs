@@ -26,6 +26,10 @@ public class MonitoringConfig
 
     public MonitoringStatus Status { get; set; } = MonitoringStatus.Active;
 
+    // Подписка на уведомления по этому мониторингу (ТЗ §4 — переключатель вкл/выкл в кабинете).
+    // По умолчанию включено; off — цикл считается, но user-уведомления не шлются.
+    public bool NotificationsEnabled { get; set; } = true;
+
     // Watermark: с какого момента добирать новые отзывы в следующем цикле (передаётся в dateFrom).
     public DateTimeOffset? LastCollectedAt { get; set; }
     public MonitoringCycleStatus? LastRunStatus { get; set; }

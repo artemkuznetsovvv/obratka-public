@@ -19,6 +19,7 @@ import DashboardPage from '@/pages/dashboards/DashboardPage'
 import MonitoringListPage from '@/pages/monitoring/MonitoringListPage'
 import MonitoringDetailPage from '@/pages/monitoring/MonitoringDetailPage'
 import ProfilePage from '@/pages/profile/ProfilePage'
+import NotificationsPage from '@/pages/notifications/NotificationsPage'
 
 export default function App() {
   return (
@@ -80,6 +81,15 @@ export default function App() {
         element={
           <ProtectedRoute>
             <ProfilePage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/notifications"
+        element={
+          <ProtectedRoute>
+            <NotificationsPage />
           </ProtectedRoute>
         }
       />

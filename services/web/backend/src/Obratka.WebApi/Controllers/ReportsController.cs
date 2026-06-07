@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Obratka.Modules.Notifications;
 using Obratka.Modules.Reports;
 using Obratka.WebApi.Auth;
 using Obratka.WebApi.Data;
@@ -18,7 +19,9 @@ public sealed class ReportsController(
     IProcessingGatewayClient gateway,
     UserManager<ApplicationUser> userManager,
     IReportsModule reports,
-    ReportDataAssembler assembler) : ControllerBase
+    ReportDataAssembler assembler,
+    INotificationsModule notifications,
+    ILogger<ReportsController> logger) : ControllerBase
 {
     // PDF-отчёт по результатам анализа, по текущим параметрам и фильтрам дашборда.
     // Filters → query (как у метрик): branchIds (обяз., выбранные на дашборде), from/to,
@@ -62,18 +65,48 @@ public sealed class ReportsController(
             .SingleOrDefaultAsync(ct);
         if (company is null) return NotFound();
 
-        var model = await assembler.BuildAsync(
-            job,
-            company.Name,
-            branchList,
-            from,
-            to,
-            ParseCsv(sources),
-            ParseCsv(sentiments),
-            ParseStars(stars),
-            ct);
+        byte[] bytes;
+        try
+        {
+            var model = await assembler.BuildAsync(
+                job,
+                company.Name,
+                branchList,
+                from,
+                to,
+                ParseCsv(sources),
+                ParseCsv(sentiments),
+                ParseStars(stars),
+                ct);
 
-        var bytes = reports.Render(model);
+            bytes = reports.Render(model);
+        }
+        catch (Exception ex)
+        {
+            var eventId = Guid.NewGuid().ToString("N");
+            logger.LogError(ex, "PDF report generation failed for job {JobId} (event {EventId})", jobId, eventId);
+            try
+            {
+                await notifications.SendAdminAlertAsync(new AdminAlert(
+                    Stage: "Отчёт",
+                    Reason: $"Сбой генерации PDF: {ex.Message}",
+                    Severity: "critical",
+                    EventId: eventId,
+                    UserId: ownerId.Value,
+                    CompanyId: job.CompanyId,
+                    CompanyName: company.Name,
+                    JobId: jobId), ct);
+            }
+            catch (Exception alertEx)
+            {
+                logger.LogWarning(alertEx, "Admin alert (report) send failed for job {JobId}", jobId);
+            }
+            return Problem(
+                statusCode: StatusCodes.Status500InternalServerError,
+                title: "Не удалось сформировать отчёт",
+                detail: "Произошла ошибка при генерации PDF. Администратор уведомлён, попробуйте позже.");
+        }
+
         var fileName = $"Обратка_{SanitizeFileName(company.Name)}_{DateTimeOffset.UtcNow:yyyy-MM-dd}.pdf";
         return File(bytes, "application/pdf", fileName);
     }

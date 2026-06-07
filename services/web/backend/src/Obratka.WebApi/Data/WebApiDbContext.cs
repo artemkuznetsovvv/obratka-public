@@ -7,6 +7,7 @@ using Obratka.WebApi.Auth;
 using Obratka.WebApi.Companies;
 using Obratka.WebApi.Geo;
 using Obratka.WebApi.Monitoring;
+using Obratka.WebApi.Notifications;
 using Obratka.WebApi.Support;
 
 namespace Obratka.WebApi.Data;
@@ -23,10 +24,18 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
     public DbSet<MonitoringConfig> MonitoringConfigs => Set<MonitoringConfig>();
     public DbSet<MonitoringCycle> MonitoringCycles => Set<MonitoringCycle>();
     public DbSet<UserRequest> UserRequests => Set<UserRequest>();
+    public DbSet<TelegramLinkToken> TelegramLinkTokens => Set<TelegramLinkToken>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
+
+        // Один Telegram-чат может принадлежать только одному аккаунту (защита от утечки между
+        // аккаунтами). Частичный уникальный индекс — только для непустых значений.
+        builder.Entity<ApplicationUser>()
+            .HasIndex(u => u.TelegramChatId)
+            .IsUnique()
+            .HasFilter("\"TelegramChatId\" IS NOT NULL");
 
         builder.Entity<RefreshToken>(b =>
         {
@@ -144,6 +153,7 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
             b.Property(x => x.Frequency).HasConversion<string>().HasMaxLength(20).IsRequired();
             b.Property(x => x.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
             b.Property(x => x.LastRunStatus).HasConversion<string>().HasMaxLength(20);
+            b.Property(x => x.NotificationsEnabled).HasDefaultValue(true);
             b.HasIndex(x => x.CompanyId);
             b.HasIndex(x => x.UserId);
             b.HasIndex(x => x.SeedJobId);
@@ -175,6 +185,20 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
                         v => v));
             b.HasIndex(x => x.MonitoringId);
             b.HasIndex(x => new { x.MonitoringId, x.CycleNumber }).IsUnique();
+        });
+
+        builder.Entity<TelegramLinkToken>(b =>
+        {
+            b.ToTable("telegram_link_tokens");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Token).HasMaxLength(64).IsRequired();
+            b.HasIndex(x => x.Token).IsUnique();
+            b.HasIndex(x => x.UserId);
+            b.HasIndex(x => x.ExpiresAt);
+            b.HasOne<ApplicationUser>()
+                .WithMany()
+                .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         builder.Entity<UserRequest>(b =>

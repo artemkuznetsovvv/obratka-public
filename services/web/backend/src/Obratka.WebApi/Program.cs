@@ -13,6 +13,7 @@ using Obratka.WebApi.Companies;
 using Obratka.WebApi.Data;
 using Obratka.WebApi.Integration.ParserService;
 using Obratka.WebApi.Integration.ProcessingGateway;
+using Obratka.WebApi.Notifications;
 using Obratka.WebApi.Scheduling;
 using Serilog;
 using Serilog.Events;
@@ -128,9 +129,21 @@ builder.Services.AddScoped<IBranchSearchService, BranchSearchService>();
 builder.Services.AddSingleton<Obratka.WebApi.Companies.Grouping.IBranchGroupingService,
     Obratka.WebApi.Companies.Grouping.BranchGroupingService>();
 
+builder.Services.AddMemoryCache();
+
 builder.Services.AddAnalyticsModule(builder.Configuration);
 builder.Services.AddReportsModule();
-builder.Services.AddNotificationsModule();
+builder.Services.AddNotificationsModule(builder.Configuration);
+
+// Адресата уведомлений резолвит Web API (доступ к Identity-пользователю + MonitoringConfig).
+builder.Services.AddScoped<INotificationRecipientResolver, WebApiNotificationRecipientResolver>();
+
+// Long-poll receiver Telegram (привязка /start) — только если канал сконфигурирован.
+var telegramConfigured = (builder.Configuration
+    .GetSection(TelegramOptions.SectionName)
+    .Get<TelegramOptions>() ?? new TelegramOptions()).IsConfigured;
+if (telegramConfigured)
+    builder.Services.AddHostedService<TelegramUpdateListener>();
 
 // Сборщик данных PDF-отчёта. Через ActivatorUtilities: опциональные метрик-сервисы
 // Analytics не зарегистрированы при пустом ProcessingReadDb — default-параметры дадут
@@ -184,6 +197,13 @@ builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
+
+// Предупреждаем, если Telegram включён, но не задан DashboardBaseUrl — кнопка «Открыть дашборд» не появится.
+var telegramOpts = app.Services
+    .GetRequiredService<Microsoft.Extensions.Options.IOptions<TelegramOptions>>().Value;
+if (telegramOpts.IsConfigured && string.IsNullOrWhiteSpace(telegramOpts.DashboardBaseUrl))
+    app.Logger.LogWarning(
+        "[telegram] DashboardBaseUrl не задан — уведомления уйдут без кнопки «Открыть дашборд».");
 
 // ---- DB init + seed ----
 using (var scope = app.Services.CreateScope())

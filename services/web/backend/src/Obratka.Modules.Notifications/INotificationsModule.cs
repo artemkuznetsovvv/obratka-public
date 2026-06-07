@@ -1,13 +1,16 @@
 namespace Obratka.Modules.Notifications;
 
-// Точки уведомлений. Реальная доставка в Telegram — зона OBR-39; сейчас лог-стаб
-// (см. NotificationsModule). Параметры — примитивы, чтобы модуль не зависел от типов Web API.
+// Точки уведомлений. Реальная доставка — Telegram (см. NotificationsModule). Когда канал не
+// сконфигурирован (нет токена) — модуль работает лог-стабом, не падая. Параметры — примитивы,
+// чтобы модуль не зависел от типов Web API; адресата резолвит INotificationRecipientResolver.
 public interface INotificationsModule
 {
-    // Алерт администратору (ошибки пайплайна, частичные/проваленные циклы).
-    Task SendAdminAlertAsync(string message, string correlationId, CancellationToken ct);
+    // Алерт администратору об ошибке (ТЗ §3). Шлётся на все Telegram:AdminChatIds.
+    Task SendAdminAlertAsync(AdminAlert alert, CancellationToken ct);
 
-    // Итог цикла мониторинга — пользователю. status: success|partial|failed.
+    // Итог цикла мониторинга — пользователю (ТЗ §2: «обновление выполнено» + «+N новых» +
+    // «частичное обновление»). status (wire): success|partial|failed|no_new.
+    // unavailableSources — человекочитаемые названия недоступных источников (для partial).
     Task SendMonitoringCycleResultAsync(
         Guid userId,
         Guid monitoringId,
@@ -15,6 +18,7 @@ public interface INotificationsModule
         int newReviewCount,
         DateTimeOffset? periodFrom,
         DateTimeOffset periodTo,
+        IReadOnlyList<string> unavailableSources,
         CancellationToken ct);
 
     // «Резкий рост негатива» — пользователю (ТЗ §6).

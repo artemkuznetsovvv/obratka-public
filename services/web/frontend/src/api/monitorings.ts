@@ -31,6 +31,7 @@ export interface MonitoringListItem {
   status: MonitoringStatus
   lastCollectedAt: string | null
   lastRunStatus: MonitoringCycleStatus | null
+  notificationsEnabled: boolean
   createdAt: string
 }
 
@@ -122,4 +123,8 @@ export const monitoringsApi = {
   resume: (id: string) => http.post(`/api/monitorings/${id}/resume`).then(() => undefined),
   run: (id: string) => http.post(`/api/monitorings/${id}/run`).then(() => undefined),
   remove: (id: string) => http.delete(`/api/monitorings/${id}`).then(() => undefined),
+
+  // Переключатель «уведомления вкл/выкл» по мониторингу.
+  setNotifications: (id: string, enabled: boolean) =>
+    http.patch(`/api/monitorings/${id}/notifications`, { enabled }).then(() => undefined),
 }

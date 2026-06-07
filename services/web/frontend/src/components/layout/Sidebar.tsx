@@ -1,6 +1,6 @@
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, BarChart3, Building2, Clock, Globe, Inbox, ListTodo, LogOut, Plus, Shield, User, Users, type LucideIcon } from 'lucide-react'
+import { Activity, BarChart3, Bell, Building2, Clock, Globe, Inbox, ListTodo, LogOut, Plus, Shield, User, Users, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Logo } from '@/components/branding/Logo'
 import { useAuth } from '@/auth/AuthContext'
@@ -87,6 +87,18 @@ export function Sidebar() {
           <Plus size={16} />
           Новый анализ
         </Button>
+        <button
+          onClick={() => navigate('/notifications')}
+          className={cn(
+            'w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors',
+            location.pathname === '/notifications'
+              ? 'bg-state-active-bg text-brand font-medium'
+              : 'text-text-secondary hover:bg-page-bg hover:text-text-primary',
+          )}
+        >
+          <Bell size={16} />
+          <span>Уведомления</span>
+        </button>
         <button
           onClick={() => navigate('/profile')}
           className={cn(

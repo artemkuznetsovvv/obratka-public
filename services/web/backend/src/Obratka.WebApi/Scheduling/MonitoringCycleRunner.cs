@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using Obratka.Modules.Analytics.Monitoring;
 using Obratka.Modules.Analytics.Recommendations;
 using Obratka.Modules.Notifications;
+using Obratka.WebApi.Companies;
 using Obratka.WebApi.Data;
 using Obratka.WebApi.Integration.ProcessingGateway;
 using Obratka.WebApi.Integration.ProcessingGateway.Contracts;
@@ -122,9 +123,8 @@ internal sealed class MonitoringCycleRunner(
         if (!anyStarted)
         {
             await FailCycleAsync(config, cycle, "Не удалось запустить сбор ни по одному источнику.");
-            await SafeNotifyAdminAsync(
-                $"Monitoring {monitoringId} cycle #{cycle.CycleNumber} failed to start (no sources).",
-                monitoringId);
+            await SafeNotifyAdminAsync(config,
+                $"Цикл #{cycle.CycleNumber}: не удалось запустить сбор ни по одному источнику.");
             return;
         }
 
@@ -288,12 +288,21 @@ internal sealed class MonitoringCycleRunner(
 
         await db.SaveChangesAsync(Ct);
 
-        // Точки уведомлений (доставка — OBR-39).
+        // Недоступные источники цикла — ТОЛЬКО среди источников этого мониторинга (растущий seed-job
+        // может содержать «чужие» источники с устаревшим не-completed статусом, их не показываем).
+        var unavailableSources = job.CollectionProgress
+            .Where(kv => config.Sources.Contains(kv.Key, StringComparer.OrdinalIgnoreCase)
+                         && !string.Equals(kv.Value.Status, "completed", StringComparison.OrdinalIgnoreCase))
+            .Select(kv => BranchSources.Label(kv.Key))
+            .Distinct()
+            .ToList();
+
+        // Точки уведомлений (Telegram). Сбой доставки внутри модуля не пробрасывается.
         try
         {
             await notifications.SendMonitoringCycleResultAsync(
                 config.UserId, config.Id, effectiveStatus.Wire(),
-                cycle.NewReviewCount, cycle.PeriodFrom, cycle.PeriodTo, Ct);
+                cycle.NewReviewCount, cycle.PeriodFrom, cycle.PeriodTo, unavailableSources, Ct);
 
             if (cycle.NegativeSpikeTriggered && prev is not null)
                 await notifications.SendNegativeSentimentAlertAsync(
@@ -302,9 +311,12 @@ internal sealed class MonitoringCycleRunner(
 
             // Алерт админу — только на реальные проблемы (partial/failed), не на «нет новых».
             if (effectiveStatus is MonitoringCycleStatus.Partial or MonitoringCycleStatus.Failed)
+            {
+                var companyName = await db.Companies.AsNoTracking()
+                    .Where(c => c.Id == config.CompanyId).Select(c => c.Name).FirstOrDefaultAsync(Ct);
                 await notifications.SendAdminAlertAsync(
-                    $"Monitoring {config.Id} cycle #{cycle.CycleNumber} finished: {effectiveStatus}.",
-                    config.Id.ToString("N"), Ct);
+                    BuildCycleAdminAlert(config, cycle, effectiveStatus, unavailableSources, job, companyName), Ct);
+            }
         }
         catch (Exception ex)
         {
@@ -362,16 +374,48 @@ internal sealed class MonitoringCycleRunner(
                       .ToList());
     }
 
-    private async Task SafeNotifyAdminAsync(string message, Guid monitoringId)
+    private async Task SafeNotifyAdminAsync(MonitoringConfig config, string reason)
     {
         try
         {
-            await notifications.SendAdminAlertAsync(message, monitoringId.ToString("N"), Ct);
+            var companyName = await db.Companies.AsNoTracking()
+                .Where(c => c.Id == config.CompanyId).Select(c => c.Name).FirstOrDefaultAsync(Ct);
+            await notifications.SendAdminAlertAsync(new AdminAlert(
+                Stage: "Мониторинг",
+                Reason: reason,
+                Severity: "critical",
+                EventId: Guid.NewGuid().ToString("N"),
+                UserId: config.UserId,
+                CompanyId: config.CompanyId,
+                CompanyName: companyName,
+                JobId: config.SeedJobId), Ct);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Admin alert send failed (monitoring {Id})", monitoringId);
+            logger.LogWarning(ex, "Admin alert send failed (monitoring {Id})", config.Id);
         }
+    }
+
+    // Admin-алерт по итогу проблемного цикла (partial/failed) с минимальным набором полей (ТЗ §3).
+    private static AdminAlert BuildCycleAdminAlert(
+        MonitoringConfig config, MonitoringCycle cycle, MonitoringCycleStatus status,
+        IReadOnlyList<string> unavailable, AnalysisJobDto job, string? companyName)
+    {
+        var reason = cycle.Error
+            ?? (unavailable.Count > 0
+                ? $"Цикл #{cycle.CycleNumber}: недоступны источники — {string.Join(", ", unavailable)}"
+                : !string.IsNullOrWhiteSpace(job.Error)
+                    ? $"Цикл #{cycle.CycleNumber} (status {status.Wire()}): {job.Error}"
+                    : $"Цикл #{cycle.CycleNumber} завершился со статусом {status.Wire()}");
+        return new AdminAlert(
+            Stage: "Мониторинг",
+            Reason: reason,
+            Severity: status == MonitoringCycleStatus.Failed ? "critical" : "warning",
+            EventId: Guid.NewGuid().ToString("N"),
+            UserId: config.UserId,
+            CompanyId: config.CompanyId,
+            CompanyName: companyName,
+            JobId: config.SeedJobId);
     }
 
     // Терминальные статусы PG analysis_jobs.

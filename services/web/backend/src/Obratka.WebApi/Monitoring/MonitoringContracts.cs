@@ -14,6 +14,8 @@ public sealed record UpdateMonitoringRequest(
     List<Guid> BranchIds,
     string Frequency);
 
+public sealed record SetNotificationsRequest(bool Enabled);
+
 // ----- Responses -----
 
 public sealed record MonitoringBranchDto(Guid Id, string? Name, string? Address, string? City);
@@ -30,6 +32,7 @@ public sealed record MonitoringListItemDto(
     string Status,            // active|paused|error
     DateTimeOffset? LastCollectedAt,
     string? LastRunStatus,    // success|partial|failed|null
+    bool NotificationsEnabled,
     DateTimeOffset CreatedAt);
 
 public sealed record MonitoringCycleDto(

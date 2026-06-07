@@ -266,6 +266,22 @@ public sealed class MonitoringsController(
         return NoContent();
     }
 
+    // Переключатель «уведомления вкл/выкл» по конкретному мониторингу (ТЗ §4).
+    [HttpPatch("{id:guid}/notifications")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> SetNotifications(
+        Guid id, [FromBody] SetNotificationsRequest request, CancellationToken ct)
+    {
+        var config = await GetOwnedAsync(id, ct);
+        if (config is null) return NotFound();
+
+        config.NotificationsEnabled = request.Enabled;
+        config.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
     // «Обновить вручную» — досрочный запуск цикла.
     [HttpPost("{id:guid}/run")]
     [ProducesResponseType(StatusCodes.Status202Accepted)]
@@ -340,6 +356,7 @@ public sealed class MonitoringsController(
             c.Status.Wire(),
             c.LastCollectedAt,
             c.LastRunStatus?.Wire(),
+            c.NotificationsEnabled,
             c.CreatedAt)).ToList();
     }
 

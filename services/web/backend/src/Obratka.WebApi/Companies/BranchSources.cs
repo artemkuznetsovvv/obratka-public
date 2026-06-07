@@ -10,4 +10,13 @@ public static class BranchSources
 
     public static bool IsKnown(string source) =>
         source is TwoGis or Yandex or Google;
+
+    // Человекочитаемое название источника для UI/уведомлений (slug → лейбл).
+    public static string Label(string source) => source switch
+    {
+        TwoGis => "2ГИС",
+        Yandex => "Яндекс.Карты",
+        Google => "Google Maps",
+        _ => source,
+    };
 }
