@@ -45,4 +45,8 @@ public sealed record AdminCompanyDetails(
     string OwnerFullName,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
+    IReadOnlyList<string> NotificationChatIds,
     IReadOnlyList<AdminCompanyBranchDto> Branches);
+
+// Доп. чаты для дублирования результатов анализов компании (Telegram chat_id: число или @username).
+public sealed record UpdateCompanyNotificationChatsRequest(IReadOnlyList<string> ChatIds);

@@ -93,6 +93,43 @@ public sealed class AdminCompaniesController(WebApiDbContext db) : ControllerBas
             data.u.FullName,
             data.c.CreatedAt,
             data.c.UpdatedAt,
+            data.c.NotificationChatIds,
             branches));
     }
+
+    // Доп. чаты для дублирования результатов анализов компании (live-мониторинг + разовые).
+    // chat_id — число (в т.ч. отрицательное для групп) или @username канала.
+    [HttpPut("{id:guid}/notification-chats")]
+    [ProducesResponseType(typeof(IReadOnlyList<string>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<IReadOnlyList<string>>> SetNotificationChats(
+        Guid id, [FromBody] UpdateCompanyNotificationChatsRequest request, CancellationToken ct)
+    {
+        var company = await db.Companies.SingleOrDefaultAsync(c => c.Id == id, ct);
+        if (company is null) return NotFound();
+
+        var cleaned = new List<string>();
+        foreach (var raw in request.ChatIds ?? [])
+        {
+            var s = raw?.Trim();
+            if (string.IsNullOrEmpty(s)) continue;
+            if (!IsValidChatId(s))
+                return BadRequest(new { error = $"Неверный chat_id: «{s}». Ожидается число (можно отрицательное) или @username." });
+            // @username Telegram трактует регистронезависимо → дедуп без учёта регистра (числам это не вредит).
+            if (!cleaned.Any(x => string.Equals(x, s, StringComparison.OrdinalIgnoreCase))) cleaned.Add(s);
+        }
+
+        company.NotificationChatIds = cleaned;
+        company.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return Ok(cleaned);
+    }
+
+    private static bool IsValidChatId(string s)
+        // Число (ASCII, в пределах long — чтобы new ChatId(...) гарантированно распарсил при отправке)
+        // ЛИБО @username. long.TryParse(Invariant) не принимает не-ASCII цифры — это и нужно.
+        => long.TryParse(s, System.Globalization.NumberStyles.AllowLeadingSign,
+               System.Globalization.CultureInfo.InvariantCulture, out _)
+           || System.Text.RegularExpressions.Regex.IsMatch(s, @"^@[A-Za-z0-9_]{3,}$");
 }

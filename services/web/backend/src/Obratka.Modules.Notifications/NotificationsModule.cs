@@ -35,8 +35,25 @@ internal sealed class NotificationsModule(
             return;
         }
 
-        var target = await ResolveDeliverableAsync(userId, monitoringId, "cycle-result", ct);
-        if (target is null) return;
+        UserNotificationTarget? target;
+        try
+        {
+            target = await recipients.ResolveUserAsync(userId, monitoringId, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[notify:user] resolve failed (cycle-result, monitoring={MonitoringId})", monitoringId);
+            return;
+        }
+        if (target is null)
+        {
+            logger.LogWarning("[notify:user] target not found (cycle-result, monitoring={MonitoringId})", monitoringId);
+            return;
+        }
+
+        // Получатели: личный чат владельца (если подписка вкл и привязан) + доп. чаты компании (всегда).
+        var recipientsList = BuildRecipients(target.NotificationsEnabled ? target.ChatId : null, target.ExtraChatIds);
+        if (NoDelivery(recipientsList, "cycle-result", monitoringId.ToString("N"))) return;
 
         var period = periodFrom is { } f
             ? $"{f:dd.MM.yyyy}–{periodTo:dd.MM.yyyy}"
@@ -63,59 +80,67 @@ internal sealed class NotificationsModule(
         if (unavailableSources.Count > 0)
             lines.Add($"⚠️ Источники недоступны: {Esc(string.Join(", ", unavailableSources))}");
 
-        await SendToUserAsync(
-            target.ChatId!, string.Join("\n", lines),
-            DashboardButton(target.SeedJobId, monitoringId),
-            "cycle-result", monitoringId.ToString("N"), ct);
+        var text = string.Join("\n", lines);
+        var button = DashboardButton(target.SeedJobId, monitoringId);
+        foreach (var chatId in recipientsList)
+            await SendRawAsync(chatId, text, button, "cycle-result", monitoringId.ToString("N"), ct);
     }
 
     public async Task SendAnalysisReadyAsync(
-        Guid userId, Guid jobId, string companyName, int reviewCount, CancellationToken ct)
+        Guid userId, Guid companyId, Guid jobId, string companyName, int reviewCount, CancellationToken ct)
     {
-        string? chatId;
+        AnalysisRecipients rec;
         try
         {
-            chatId = await recipients.ResolveChatIdAsync(userId, ct);
+            rec = await recipients.ResolveAnalysisRecipientsAsync(userId, companyId, ct);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "[notify:user] resolve chatId failed (analysis-ready, user={UserId})", userId);
+            logger.LogWarning(ex, "[notify:user] resolve failed (analysis-ready, job={JobId})", jobId);
             return;
         }
 
-        if (bot is null || string.IsNullOrWhiteSpace(chatId))
-        {
-            logger.LogInformation(
-                "[notify:user] канал недоступен (analysis-ready, job={JobId}, linked={Linked}, botEnabled={BotEnabled}) — skip",
-                jobId, !string.IsNullOrWhiteSpace(chatId), bot is not null);
-            return;
-        }
+        var recipientsList = BuildRecipients(rec.OwnerChatId, rec.ExtraChatIds);
+        if (NoDelivery(recipientsList, "analysis-ready", jobId.ToString("N"))) return;
 
         var text =
             $"<b>✅ Анализ готов — {Esc(companyName)}</b>\n" +
             $"Собрано отзывов: {reviewCount}";
-
-        await SendRawAsync(
-            chatId, text, DashboardButtonForPath($"/history/{jobId}/dashboard"),
-            "analysis-ready", jobId.ToString("N"), ct);
+        var button = DashboardButtonForPath($"/history/{jobId}/dashboard");
+        foreach (var chatId in recipientsList)
+            await SendRawAsync(chatId, text, button, "analysis-ready", jobId.ToString("N"), ct);
     }
 
     public async Task SendNegativeSentimentAlertAsync(
         Guid userId, Guid monitoringId, double previousNegativePp, double currentNegativePp,
         int newReviewCount, CancellationToken ct)
     {
-        var target = await ResolveDeliverableAsync(userId, monitoringId, "negative-spike", ct);
-        if (target is null) return;
+        UserNotificationTarget? target;
+        try
+        {
+            target = await recipients.ResolveUserAsync(userId, monitoringId, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[notify:user] resolve failed (negative-spike, monitoring={MonitoringId})", monitoringId);
+            return;
+        }
+        if (target is null)
+        {
+            logger.LogWarning("[notify:user] target not found (negative-spike, monitoring={MonitoringId})", monitoringId);
+            return;
+        }
+
+        var recipientsList = BuildRecipients(target.NotificationsEnabled ? target.ChatId : null, target.ExtraChatIds);
+        if (NoDelivery(recipientsList, "negative-spike", monitoringId.ToString("N"))) return;
 
         var text =
             $"<b>📈 Резкий рост негатива — {Esc(target.CompanyName)}</b>\n" +
             $"Доля негатива: {previousNegativePp:0.#}% → {currentNegativePp:0.#}%\n" +
             $"За цикл: {newReviewCount} {Plural(newReviewCount, "новый отзыв", "новых отзыва", "новых отзывов")}";
-
-        await SendToUserAsync(
-            target.ChatId!, text,
-            DashboardButton(target.SeedJobId, monitoringId),
-            "negative-spike", monitoringId.ToString("N"), ct);
+        var button = DashboardButton(target.SeedJobId, monitoringId);
+        foreach (var chatId in recipientsList)
+            await SendRawAsync(chatId, text, button, "negative-spike", monitoringId.ToString("N"), ct);
     }
 
     public async Task SendAdminAlertAsync(AdminAlert alert, CancellationToken ct)
@@ -154,48 +179,29 @@ internal sealed class NotificationsModule(
 
     // ----- helpers -----
 
-    // Резолвит получателя и проверяет, что доставка возможна (подписка вкл + есть привязка).
-    // null → отправлять не нужно (причина залогирована).
-    private async Task<UserNotificationTarget?> ResolveDeliverableAsync(
-        Guid userId, Guid monitoringId, string type, CancellationToken ct)
+    // Финальный список получателей: личный чат владельца (если есть) + доп. чаты компании,
+    // без пустых и дублей. Порядок: владелец первым.
+    private static List<string> BuildRecipients(string? ownerChatId, IReadOnlyList<string> extra)
     {
-        UserNotificationTarget? target;
-        try
+        var list = new List<string>();
+        void Add(string? s)
         {
-            target = await recipients.ResolveUserAsync(userId, monitoringId, ct);
+            if (!string.IsNullOrWhiteSpace(s) && !list.Contains(s)) list.Add(s);
         }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "[notify:user] resolve failed (type={Type}, user={UserId}, monitoring={MonitoringId})",
-                type, userId, monitoringId);
-            return null;
-        }
-
-        if (target is null)
-        {
-            logger.LogWarning("[notify:user] target not found (type={Type}, user={UserId}, monitoring={MonitoringId})",
-                type, userId, monitoringId);
-            return null;
-        }
-        if (!target.NotificationsEnabled)
-        {
-            logger.LogInformation("[notify:user] подписка выкл (type={Type}, monitoring={MonitoringId}) — skip",
-                type, monitoringId);
-            return null;
-        }
-        if (bot is null || string.IsNullOrWhiteSpace(target.ChatId))
-        {
-            logger.LogInformation(
-                "[notify:user] канал недоступен (type={Type}, monitoring={MonitoringId}, linked={Linked}, botEnabled={BotEnabled}) — skip",
-                type, monitoringId, !string.IsNullOrWhiteSpace(target.ChatId), bot is not null);
-            return null;
-        }
-        return target;
+        Add(ownerChatId);
+        foreach (var e in extra) Add(e);
+        return list;
     }
 
-    private Task SendToUserAsync(
-        string chatId, string text, InlineKeyboardMarkup? kb, string type, string corr, CancellationToken ct)
-        => SendRawAsync(chatId, text, kb, type, corr, ct);
+    // true → доставлять некому (бот выключен или нет ни одного чата). Логирует причину.
+    private bool NoDelivery(IReadOnlyList<string> recipients, string type, string corr)
+    {
+        if (bot is not null && recipients.Count > 0) return false;
+        logger.LogInformation(
+            "[notify:user] нет получателей (type={Type}, corr={Corr}, recipients={Count}, botEnabled={BotEnabled}) — skip",
+            type, corr, recipients.Count, bot is not null);
+        return true;
+    }
 
     // Единственная точка отправки: логирует каждый исходящий запрос; ошибки — без ретраев.
     private async Task SendRawAsync(

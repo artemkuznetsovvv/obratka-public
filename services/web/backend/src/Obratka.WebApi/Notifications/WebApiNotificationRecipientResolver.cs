@@ -5,8 +5,9 @@ using Obratka.WebApi.Data;
 namespace Obratka.WebApi.Notifications;
 
 // Реализация резолвера получателя (модуль уведомлений объявляет интерфейс, WebApi его наполняет —
-// у него доступ к Identity-пользователю + MonitoringConfig). Возвращает chatId (или null, если
-// Telegram не привязан), флаг подписки, seedJobId (для ссылки на дашборд) и имя компании.
+// у него доступ к Identity-пользователю, MonitoringConfig и Company). Возвращает chatId владельца
+// (или null, если не привязан), флаг подписки, seedJobId (для ссылки), имя компании и доп. чаты
+// компании (админ-настройка Company.NotificationChatIds) для дублирования результатов.
 internal sealed class WebApiNotificationRecipientResolver(WebApiDbContext db) : INotificationRecipientResolver
 {
     public async Task<UserNotificationTarget?> ResolveUserAsync(
@@ -23,17 +24,32 @@ internal sealed class WebApiNotificationRecipientResolver(WebApiDbContext db) : 
             .Select(u => u.TelegramChatId)
             .FirstOrDefaultAsync(ct);
 
-        var companyName = await db.Companies.AsNoTracking()
+        var company = await db.Companies.AsNoTracking()
             .Where(c => c.Id == cfg.CompanyId)
-            .Select(c => c.Name)
-            .FirstOrDefaultAsync(ct) ?? "—";
+            .Select(c => new { c.Name, c.NotificationChatIds })
+            .FirstOrDefaultAsync(ct);
 
-        return new UserNotificationTarget(chatId, cfg.NotificationsEnabled, cfg.SeedJobId, companyName);
+        return new UserNotificationTarget(
+            chatId,
+            cfg.NotificationsEnabled,
+            cfg.SeedJobId,
+            company?.Name ?? "—",
+            company?.NotificationChatIds ?? []);
     }
 
-    public async Task<string?> ResolveChatIdAsync(Guid userId, CancellationToken ct)
-        => await db.Users.AsNoTracking()
+    public async Task<AnalysisRecipients> ResolveAnalysisRecipientsAsync(
+        Guid userId, Guid companyId, CancellationToken ct)
+    {
+        var ownerChatId = await db.Users.AsNoTracking()
             .Where(u => u.Id == userId)
             .Select(u => u.TelegramChatId)
             .FirstOrDefaultAsync(ct);
+
+        var extra = await db.Companies.AsNoTracking()
+            .Where(c => c.Id == companyId)
+            .Select(c => c.NotificationChatIds)
+            .FirstOrDefaultAsync(ct);
+
+        return new AnalysisRecipients(ownerChatId, extra ?? []);
+    }
 }

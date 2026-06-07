@@ -61,6 +61,7 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
             b.Property(x => x.Description).HasMaxLength(4000);
             b.Property(x => x.Cities).HasColumnType("text[]");
             b.Property(x => x.DraftSources).HasColumnType("text[]");
+            b.Property(x => x.NotificationChatIds).HasColumnType("text[]").HasDefaultValueSql("'{}'");
             b.HasIndex(x => x.OwnerUserId);
             b.HasOne<ApplicationUser>()
                 .WithMany()

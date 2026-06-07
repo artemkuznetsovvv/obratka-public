@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useMutation, useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, MapPin, Play, Search, Star } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Bell, CheckCircle2, ChevronDown, ChevronRight, Loader2, MapPin, Play, Save, Search, Star } from 'lucide-react'
 import { AppLayout } from '@/layouts/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { describeApiError } from '@/api/errors'
 import {
   Dialog,
   DialogClose,
@@ -282,6 +283,74 @@ function LaunchAnalysisDialog({
   )
 }
 
+// Редактор доп. Telegram-чатов компании: туда дублируются РЕЗУЛЬТАТЫ анализов (мониторинг + разовые)
+// сверх личного чата владельца. Ошибки сбора/анализа сюда не идут (они на Telegram:AdminChatIds).
+function NotificationChatsEditor({
+  companyId,
+  initial,
+}: {
+  companyId: string
+  initial: string[]
+}) {
+  const queryClient = useQueryClient()
+  const [value, setValue] = useState(initial.join('\n'))
+
+  const save = useMutation({
+    mutationFn: () => {
+      const ids = value
+        .split(/[\n,]/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+      return adminCompaniesApi.setNotificationChats(companyId, ids)
+    },
+    onSuccess: (normalized) => {
+      setValue(normalized.join('\n'))
+      queryClient.invalidateQueries({ queryKey: ['admin', 'companies', 'details', companyId] })
+    },
+  })
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-1">
+        <Bell size={14} className="text-brand" />
+        <div className="text-xs uppercase text-text-tertiary">
+          Доп. чаты для результатов (Telegram)
+        </div>
+      </div>
+      <p className="text-xs text-text-tertiary mb-2">
+        chat_id (число; для групп — отрицательное) или @username канала — по одному в строке или через
+        запятую. Сюда дублируются результаты анализов компании (live-мониторинг и разовые) сверх чата
+        владельца. Узнать id: команда <span className="font-mono">/chatid</span> боту.
+      </p>
+      <textarea
+        value={value}
+        onChange={(e) => {
+          setValue(e.target.value)
+          // Сбрасываем плашку «Сохранено»/ошибку, как только пошли новые правки.
+          if (save.isSuccess || save.isError) save.reset()
+        }}
+        rows={3}
+        placeholder={'-1001234567890\n@my_company_channel'}
+        className="w-full rounded-lg border border-border-subtle bg-card px-3 py-2 text-sm font-mono text-text-primary focus:outline-none focus:ring-2 focus:ring-ring"
+      />
+      <div className="mt-2 flex items-center gap-3">
+        <Button size="sm" className="gap-2" onClick={() => save.mutate()} disabled={save.isPending}>
+          {save.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+          Сохранить
+        </Button>
+        {save.isError && (
+          <span className="text-sm text-destructive">{describeApiError(save.error)}</span>
+        )}
+        {save.isSuccess && !save.isPending && (
+          <span className="text-sm text-emerald-700 flex items-center gap-1">
+            <CheckCircle2 size={14} /> Сохранено
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function toIsoOrNull(value: string): string | null {
   if (!value) return null
   // value is a date-only string from <input type="date">, treat it as UTC midnight.
@@ -338,6 +407,8 @@ function CompanyDetails({ data }: { data: AdminCompanyDetails }) {
           </span>
         </div>
       </div>
+
+      <NotificationChatsEditor companyId={data.id} initial={data.notificationChatIds} />
 
       <div>
         <div className="flex items-baseline gap-3 mb-2">

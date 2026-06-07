@@ -75,7 +75,7 @@ internal sealed class AnalysisNotificationReconciler(
                         .AnyAsync(m => m.SeedJobId == job.Id, Ct);
                     if (!isMonitored)
                         await notifications.SendAnalysisReadyAsync(
-                            watch.UserId, job.Id, await CompanyNameAsync(job.CompanyId), job.ReviewCount, Ct);
+                            watch.UserId, job.CompanyId, job.Id, await CompanyNameAsync(job.CompanyId), job.ReviewCount, Ct);
                 }
                 else // partial | failed → admin-алерт (ТЗ §3)
                 {

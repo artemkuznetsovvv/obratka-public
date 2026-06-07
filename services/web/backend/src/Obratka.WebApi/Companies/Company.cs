@@ -10,6 +10,11 @@ public class Company
     public List<string> Cities { get; set; } = new();
     public string? Description { get; set; }
 
+    // Доп. Telegram chat_id, куда дублируются РЕЗУЛЬТАТЫ анализов этой компании (live-мониторинг
+    // и разовые) — сверх личного чата владельца. Настраивается админом в админ-панели. На ошибки
+    // не влияет (те идут на Telegram:AdminChatIds).
+    public List<string> NotificationChatIds { get; set; } = new();
+
     // «Настройки следующего анализа» — позволяют юзеру вернуться в воронку
     // через несколько дней. На шаге 1 мастера эти поля заполняются и persist'ятся
     // здесь; sessionStorage используется как кэш в пределах одной сессии (для скорости),

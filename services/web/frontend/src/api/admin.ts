@@ -302,6 +302,7 @@ export interface AdminCompanyDetails {
   ownerFullName: string
   createdAt: string
   updatedAt: string
+  notificationChatIds: string[]
   branches: AdminCompanyBranchDto[]
 }
 
@@ -311,4 +312,10 @@ export const adminCompaniesApi = {
 
   get: (id: string) =>
     http.get<AdminCompanyDetails>(`/api/admin/companies/${id}`).then((r) => r.data),
+
+  // Доп. чаты для дублирования результатов анализов компании. Возвращает нормализованный список.
+  setNotificationChats: (id: string, chatIds: string[]) =>
+    http
+      .put<string[]>(`/api/admin/companies/${id}/notification-chats`, { chatIds })
+      .then((r) => r.data),
 }
