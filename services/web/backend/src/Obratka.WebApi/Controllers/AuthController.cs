@@ -234,7 +234,9 @@ public sealed class AuthController(
         var access = jwt.GenerateAccessToken(user, roles);
         var refresh = await refreshStore.IssueAsync(user.Id, ct);
         refreshCookie.Set(Response, refresh.Token, refresh.ExpiresAt);
-        logger.LogInformation("Issued tokens for {UserId} ({Email})", user.Id, user.Email);
+        // Debug, не Information: срабатывает на каждый refresh (access живёт 15 мин →
+        // ~раз в 15 мин на активную сессию) — в проде это чистый шум.
+        logger.LogDebug("Issued tokens for {UserId} ({Email})", user.Id, user.Email);
 
         return Ok(new AuthResponse(
             access.Token,

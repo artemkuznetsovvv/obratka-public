@@ -248,12 +248,20 @@ if (app.Environment.IsDevelopment())
 
 app.UseSerilogRequestLogging(options =>
 {
+    // Уровень per-request. 401/404 — ожидаемый штатный шум (истёкший access-токен перед
+    // refresh; поллинг метрик job-а без готовых агрегатов — залп 404 на заход в дашборд),
+    // поэтому Debug: в проде (MinimumLevel=Information) не пишутся, в dev (Debug) остаются
+    // для отладки роутов. Прочие 4xx — реальные клиентские ошибки → Warning; 5xx/исключения
+    // → Error; медленные (>1с) успешные запросы → Warning для видимости перфоманса.
     options.GetLevel = (httpContext, elapsed, ex) =>
-        ex != null || httpContext.Response.StatusCode >= 500
-            ? LogEventLevel.Error
-            : httpContext.Response.StatusCode >= 400
-                ? LogEventLevel.Warning
-                : LogEventLevel.Debug;
+    {
+        var code = httpContext.Response.StatusCode;
+        if (ex != null || code >= 500) return LogEventLevel.Error;
+        if (code is 401 or 404) return LogEventLevel.Debug;
+        if (code >= 400) return LogEventLevel.Warning;
+        if (elapsed > 1000) return LogEventLevel.Warning;
+        return LogEventLevel.Debug;
+    };
 });
 app.UseAuthentication();
 app.UseAuthorization();
