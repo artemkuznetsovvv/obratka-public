@@ -9,6 +9,7 @@ import { MetricFreshPulse } from '../cards/MetricFreshPulse'
 import { MetricTopTopics } from '../cards/MetricTopTopics'
 import { MetricRecommendPercent } from '../cards/MetricRecommendPercent'
 import { MetricRecentReviews } from '../cards/MetricRecentReviews'
+import { MetricTopExamples } from '../cards/MetricTopExamples'
 
 // Секция одного филиала. По спеке:
 //   - Базовый слой: метрики 1, 2, 3 (горизонтальный ряд)
@@ -66,13 +67,8 @@ export function BranchSection({ branch }: { branch: DashboardBranchDto }) {
         <MetricRecentReviews branchId={branch.branchId} />
       </div>
 
-      {/* Опц. блок «Топ примеров» (ТЗ 4.3) — пока placeholder, MVP включит позже */}
-      <Card className="p-4 border-dashed border-border-subtle bg-page-bg/30">
-        <div className="text-sm font-semibold text-text-primary mb-1">Топ примеров</div>
-        <div className="text-xs text-text-tertiary">
-          3–5 положительных и 3–5 отрицательных отзывов за выбранный период (опционально).
-        </div>
-      </Card>
+      {/* Блок «Топ примеров» (ТЗ 4.3): до 5 позитивных + до 5 негативных отзывов. */}
+      <MetricTopExamples branchId={branch.branchId} />
     </div>
   )
 }

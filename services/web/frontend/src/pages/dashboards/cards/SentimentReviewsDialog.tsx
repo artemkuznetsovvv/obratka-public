@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { Star } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -10,16 +9,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { metricsApi, type SentimentReviewItemDto } from '@/api/metrics'
+import { metricsApi } from '@/api/metrics'
 import { cn } from '@/lib/utils'
-import { SOURCE_LABEL } from '@/pages/history/analysisStatus'
 import { useDashboardFilters } from '../DashboardFiltersContext'
-
-const SOURCE_BADGE: Record<string, string> = {
-  '2gis': 'bg-emerald-100 text-emerald-700',
-  yandex: 'bg-amber-100 text-amber-700',
-  google: 'bg-blue-100 text-blue-700',
-}
+import { ReviewItem } from './shared/ReviewItem'
 
 const SENTIMENT_META: Record<
   string,
@@ -156,43 +149,4 @@ export function SentimentReviewsDialog({
       </DialogContent>
     </Dialog>
   )
-}
-
-function ReviewItem({ review }: { review: SentimentReviewItemDto }) {
-  const date = formatDate(review.reviewDate)
-  return (
-    <li className="rounded-xl border border-border-subtle bg-card/50 px-4 py-3">
-      <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
-        <div className="flex items-center gap-2">
-          <span
-            className={cn(
-              'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold',
-              SOURCE_BADGE[review.source] ?? 'bg-page-bg text-text-secondary',
-            )}
-          >
-            {SOURCE_LABEL[review.source] ?? review.source}
-          </span>
-          {review.stars != null && (
-            <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 tabular-nums">
-              {review.stars}
-              <Star size={11} className="fill-amber-500 text-amber-500" />
-            </span>
-          )}
-        </div>
-        <span className="text-[11px] text-text-tertiary tabular-nums">{date}</span>
-      </div>
-      <div className="text-sm text-text-primary whitespace-pre-line break-words">
-        {review.text || <span className="italic text-text-tertiary">Пустой текст отзыва</span>}
-      </div>
-    </li>
-  )
-}
-
-function formatDate(iso: string): string {
-  try {
-    const d = new Date(iso)
-    return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
-  } catch {
-    return iso
-  }
 }
