@@ -218,7 +218,10 @@ function PwdInput({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className="h-11 pl-9 pr-10"
-          autoComplete="off"
+          // Форма смены пароля, не вход: "new-password" гасит автозаполнение
+          // сохранёнными кредами (в т.ч. в поле «Текущий пароль»), которое
+          // браузеры игнорируют при autoComplete="off". Применяем ко всем трём.
+          autoComplete="new-password"
         />
         <button
           type="button"

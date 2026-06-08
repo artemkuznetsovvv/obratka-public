@@ -7,12 +7,14 @@ public sealed record CreateMonitoringRequest(
     Guid SeedJobId,
     List<string> Sources,
     List<Guid> BranchIds,
-    string Frequency); // enum-токен: Every10Min|Every30Min|Daily|Weekly|Biweekly|Monthly
+    string Frequency, // enum-токен: Every10Min|Every30Min|Daily|Weekly|Biweekly|Monthly
+    int WindowDays);  // период окна (дни): 7|30|90 (ТЗ §1)
 
 public sealed record UpdateMonitoringRequest(
     List<string> Sources,
     List<Guid> BranchIds,
-    string Frequency);
+    string Frequency,
+    int WindowDays);
 
 public sealed record SetNotificationsRequest(bool Enabled);
 

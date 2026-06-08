@@ -12,7 +12,10 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { SOURCE_LABEL } from '@/pages/history/analysisStatus'
 import {
+  DEFAULT_WINDOW_DAYS,
   FREQUENCY_LABEL,
+  WINDOW_DAYS_LABEL,
+  WINDOW_DAYS_OPTIONS,
   frequenciesForRole,
   type MonitoringFrequency,
 } from '@/api/monitorings'
@@ -28,6 +31,7 @@ export interface MonitoringConfigValues {
   sources: string[]
   branchIds: string[]
   frequency: MonitoringFrequency
+  windowDays: number
 }
 
 interface Props {
@@ -63,6 +67,7 @@ export function MonitoringConfigDialog({
   const [sources, setSources] = useState<Set<string>>(new Set())
   const [branchIds, setBranchIds] = useState<Set<string>>(new Set())
   const [frequency, setFrequency] = useState<MonitoringFrequency>(defaultFreq)
+  const [windowDays, setWindowDays] = useState<number>(DEFAULT_WINDOW_DAYS)
   const [localError, setLocalError] = useState<string | null>(null)
 
   // Сброс/инициализация при открытии: по умолчанию выбраны все источники/филиалы анализа.
@@ -72,6 +77,12 @@ export function MonitoringConfigDialog({
     setBranchIds(new Set(initial?.branchIds ?? availableBranches.map((b) => b.branchId)))
     const initFreq = initial?.frequency
     setFrequency(initFreq && freqOptions.includes(initFreq) ? initFreq : defaultFreq)
+    const initWindow = initial?.windowDays
+    setWindowDays(
+      initWindow && (WINDOW_DAYS_OPTIONS as readonly number[]).includes(initWindow)
+        ? initWindow
+        : DEFAULT_WINDOW_DAYS,
+    )
     setLocalError(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -97,6 +108,7 @@ export function MonitoringConfigDialog({
       sources: [...sources],
       branchIds: [...branchIds],
       frequency,
+      windowDays,
     })
   }
 
@@ -190,6 +202,17 @@ export function MonitoringConfigDialog({
                 Частые интервалы (10/30 мин) доступны только администратору — для тестирования.
               </p>
             )}
+          </Field>
+
+          {/* Период окна — за какой последний период показываются данные в дашборде. */}
+          <Field label="Период окна">
+            <div className="flex flex-wrap gap-2">
+              {WINDOW_DAYS_OPTIONS.map((d) => (
+                <Chip key={d} selected={windowDays === d} onClick={() => setWindowDays(d)}>
+                  {WINDOW_DAYS_LABEL[d]}
+                </Chip>
+              ))}
+            </div>
           </Field>
 
           {(localError || errorMessage) && (

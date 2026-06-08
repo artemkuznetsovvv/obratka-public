@@ -25,8 +25,8 @@ public sealed class MonitoringsController(
     IMonitoringStatsService? stats = null,
     IRecommendationsService? recommendations = null) : ControllerBase
 {
-    // Окно в настройках убрано из UX (период выбирается на дашборде). Колонку оставляем
-    // для совместимости со схемой, заполняем дефолтом.
+    // Дефолт окна для обратной совместимости: старый клиент мог не прислать windowDays
+    // (System.Text.Json десериализует отсутствующее int-поле в 0) → трактуем как 30.
     private const int DefaultWindowDays = 30;
 
     // Включение мониторинга с дашборда: создаём config (active), снимаем baseline (cycle 0),
@@ -46,7 +46,8 @@ public sealed class MonitoringsController(
             .SingleOrDefaultAsync(c => c.Id == request.CompanyId && c.OwnerUserId == ownerId, ct);
         if (company is null) return NotFound(new { error = "Company not found" });
 
-        if (!TryValidateSettings(request.Sources, request.BranchIds, request.Frequency,
+        var windowDays = request.WindowDays <= 0 ? DefaultWindowDays : request.WindowDays;
+        if (!TryValidateSettings(request.Sources, request.BranchIds, request.Frequency, windowDays,
                 out var frequency, out var validationError))
             return BadRequest(new { error = validationError });
 
@@ -79,7 +80,7 @@ public sealed class MonitoringsController(
             SeedJobId = request.SeedJobId,
             Sources = request.Sources.Distinct().ToList(),
             BranchIds = request.BranchIds.Distinct().ToList(),
-            WindowDays = DefaultWindowDays,
+            WindowDays = windowDays,
             Frequency = frequency,
             CronSchedule = MonitoringFrequencies.ToCron(frequency),
             Status = MonitoringStatus.Active,
@@ -217,12 +218,14 @@ public sealed class MonitoringsController(
             .SingleOrDefaultAsync(m => m.Id == id && m.UserId == ownerId, ct);
         if (config is null) return NotFound();
 
-        if (!TryValidateSettings(request.Sources, request.BranchIds, request.Frequency,
+        var windowDays = request.WindowDays <= 0 ? DefaultWindowDays : request.WindowDays;
+        if (!TryValidateSettings(request.Sources, request.BranchIds, request.Frequency, windowDays,
                 out var frequency, out var validationError))
             return BadRequest(new { error = validationError });
 
         config.Sources = request.Sources.Distinct().ToList();
         config.BranchIds = request.BranchIds.Distinct().ToList();
+        config.WindowDays = windowDays;
         config.Frequency = frequency;
         config.CronSchedule = MonitoringFrequencies.ToCron(frequency);
         config.UpdatedAt = DateTimeOffset.UtcNow;
@@ -361,7 +364,7 @@ public sealed class MonitoringsController(
     }
 
     private bool TryValidateSettings(
-        List<string> sources, List<Guid> branchIds, string frequencyRaw,
+        List<string> sources, List<Guid> branchIds, string frequencyRaw, int windowDays,
         out MonitoringFrequency frequency, out string? error)
     {
         frequency = default;
@@ -375,6 +378,15 @@ public sealed class MonitoringsController(
         if (branchIds is null || branchIds.Count == 0)
         {
             error = "Выберите хотя бы один филиал.";
+            return false;
+        }
+        if (!MonitoringFrequencies.AllowedWindowDays.Contains(windowDays))
+        {
+            var allowed = MonitoringFrequencies.AllowedWindowDays;
+            var allowedStr = allowed.Length > 1
+                ? $"{string.Join(", ", allowed[..^1])} или {allowed[^1]}"
+                : allowed[0].ToString();
+            error = $"Период окна может быть только {allowedStr} дней.";
             return false;
         }
         if (!Enum.TryParse(frequencyRaw, ignoreCase: true, out frequency))

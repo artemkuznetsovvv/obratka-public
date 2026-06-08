@@ -291,6 +291,7 @@ function DashboardHeader({ data }: { data: DashboardHeaderDto }) {
             sources: values.sources,
             branchIds: values.branchIds,
             frequency: values.frequency,
+            windowDays: values.windowDays,
           })
         }
       />

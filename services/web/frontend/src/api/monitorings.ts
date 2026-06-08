@@ -71,12 +71,14 @@ export interface CreateMonitoringRequest {
   sources: string[]
   branchIds: string[]
   frequency: MonitoringFrequency
+  windowDays: number
 }
 
 export interface UpdateMonitoringRequest {
   sources: string[]
   branchIds: string[]
   frequency: MonitoringFrequency
+  windowDays: number
 }
 
 // ----- Option metadata (label + доступность по роли) -----
@@ -97,6 +99,17 @@ export const USER_FREQUENCIES: MonitoringFrequency[] = ['Daily', 'Weekly', 'Biwe
 export function frequenciesForRole(isAdmin: boolean): MonitoringFrequency[] {
   return isAdmin ? ADMIN_FREQUENCIES : USER_FREQUENCIES
 }
+
+// Период окна (дни) — синхронно с backend MonitoringFrequencies.AllowedWindowDays.
+export const WINDOW_DAYS_OPTIONS = [7, 30, 90] as const
+export type WindowDaysOption = (typeof WINDOW_DAYS_OPTIONS)[number]
+// Keyed by tuple type → добавишь значение в OPTIONS, но не в LABEL — словит компилятор.
+export const WINDOW_DAYS_LABEL: Record<WindowDaysOption, string> = {
+  7: 'Последние 7 дней',
+  30: 'Последние 30 дней',
+  90: 'Последние 90 дней',
+}
+export const DEFAULT_WINDOW_DAYS = 30
 
 export const MONITORING_STATUS_LABEL: Record<MonitoringStatus, string> = {
   active: 'Активен',

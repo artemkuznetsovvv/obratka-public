@@ -260,6 +260,7 @@ function EditMonitoringDialog({
         sources: monitoring.sources,
         branchIds: monitoring.branches.map((b) => b.id),
         frequency: monitoring.frequency,
+        windowDays: monitoring.windowDays,
       }}
       submitting={updateM.isPending}
       errorMessage={updateM.isError ? describeApiError(updateM.error) : null}

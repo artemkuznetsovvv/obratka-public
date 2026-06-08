@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import type { Matcher } from 'react-day-picker'
 import { CalendarRange, ChevronDown, Filter, RotateCcw } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -124,7 +125,7 @@ export function DashboardFilters({ header }: { header: DashboardHeaderDto }) {
         )}
       </div>
       <div className="flex flex-wrap items-end gap-2">
-        <DateRange />
+        <DateRange periodFrom={header.periodFrom} periodTo={header.periodTo} />
         <MultiSelectFilter
           label="Источник"
           options={sourceOptions}
@@ -177,14 +178,38 @@ export function DashboardFilters({ header }: { header: DashboardHeaderDto }) {
 }
 
 // Период — единый trigger-popover с DayPicker в range-режиме и пресетами
-// слева. Пресеты — sliding windows от клиентского «сегодня» (юзер мыслит
-// «месяц от моего сегодня», бэк сравнивает с review_date по date-only).
-function DateRange() {
+// слева. Пресеты — sliding windows от конца периода анализа (юзер мыслит
+// «последний месяц анализа», бэк сравнивает с review_date по date-only).
+// Выбор ограничен периодом анализа [periodFrom, periodTo] — нельзя уйти за
+// границы джоба (см. caveat в DashboardFiltersContext: period — best-effort
+// из Company.DraftPeriodFrom/To, но это ровно то, что показано в шапке).
+function DateRange({
+  periodFrom,
+  periodTo,
+}: {
+  periodFrom: string | null
+  periodTo: string | null
+}) {
   const f = useDashboardFilters()
   const [open, setOpen] = useState(false)
 
-  const fromDate = f.periodFrom ? new Date(f.periodFrom) : undefined
-  const toDate = f.periodTo ? new Date(f.periodTo) : undefined
+  // parseIsoDateLocal (а не new Date) — значения фильтра приходят date-only из toIsoDate;
+  // new Date('YYYY-MM-DD') парсит как UTC-полночь и в минус-зонах съезжает на день назад,
+  // рассинхронизируясь с minDate/maxDate (тоже локальными). Держим один часовой контекст.
+  const fromDate = f.periodFrom ? parseIsoDateLocal(f.periodFrom) : undefined
+  const toDate = f.periodTo ? parseIsoDateLocal(f.periodTo) : undefined
+
+  // Границы анализа как локальные даты (полночь) — для дизейбла и пресетов.
+  const minDate = useMemo(() => (periodFrom ? parseIsoDateLocal(periodFrom) : undefined), [periodFrom])
+  const maxDate = useMemo(() => (periodTo ? parseIsoDateLocal(periodTo) : undefined), [periodTo])
+
+  // Дни вне [minDate, maxDate] нельзя выбрать (RDP matchers; границы включительно).
+  const disabledMatcher = useMemo<Matcher[] | undefined>(() => {
+    const m: Matcher[] = []
+    if (minDate) m.push({ before: minDate })
+    if (maxDate) m.push({ after: maxDate })
+    return m.length > 0 ? m : undefined
+  }, [minDate, maxDate])
 
   const triggerLabel = useMemo(() => {
     if (!f.periodFrom || !f.periodTo) return 'Выбрать период'
@@ -192,10 +217,15 @@ function DateRange() {
   }, [f.periodFrom, f.periodTo])
 
   const applyPreset = (daysBack: number) => {
-    const today = new Date()
-    const start = new Date(today)
+    // Верх пресета — конец периода анализа (или сегодня, если период не задан).
+    const upper = maxDate ?? new Date()
+    const start = new Date(upper)
     start.setDate(start.getDate() - daysBack + 1)
-    f.setPeriod(toIsoDate(start), toIsoDate(today))
+    // Низ не вылезает за начало периода анализа.
+    const clampedStart = minDate && start < minDate ? minDate : start
+    // Защита от инвертированных границ (periodFrom > periodTo): не отдаём from > to.
+    const safeStart = clampedStart > upper ? upper : clampedStart
+    f.setPeriod(toIsoDate(safeStart), toIsoDate(upper))
     setOpen(false)
   }
 
@@ -252,7 +282,10 @@ function DateRange() {
                   )
                 }}
                 numberOfMonths={2}
-                defaultMonth={fromDate}
+                defaultMonth={fromDate ?? maxDate ?? minDate}
+                disabled={disabledMatcher}
+                startMonth={minDate}
+                endMonth={maxDate}
               />
             </div>
           </div>
@@ -294,12 +327,21 @@ function toIsoDate(d: Date): string {
   return `${y}-${m}-${day}`
 }
 
+// ISO-datetime (DateTimeOffset из API) → локальная дата на полночь, без сдвига
+// по таймзоне. Берём только Y-M-D, чтобы границы совпадали с date-only выбором
+// календаря (иначе «2024-12-01T00:00:00Z» в минус-зонах съезжал бы на день назад).
+function parseIsoDateLocal(iso: string): Date {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number)
+  return new Date(y, (m ?? 1) - 1, d ?? 1)
+}
+
 // Компактный формат для trigger-кнопки: «01 апр» (без года, чтобы влезало).
 // Год в trigger не нужен — диапазон обычно в текущем году; если фильтр
 // растянули на несколько лет — раскроет popover и юзер увидит точные даты.
 function formatDayMonth(iso: string): string {
   try {
-    const d = new Date(iso)
+    // parseIsoDateLocal — date-only значения фильтра без UTC-сдвига (см. fromDate выше).
+    const d = parseIsoDateLocal(iso)
     return d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })
   } catch {
     return iso.slice(0, 10)
