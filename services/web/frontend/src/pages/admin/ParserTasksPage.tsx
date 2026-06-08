@@ -51,7 +51,6 @@ export default function ParserTasksPage() {
                 <TableHead>Task ID</TableHead>
                 <TableHead>Source</TableHead>
                 <TableHead>Статус</TableHead>
-                <TableHead>Прогресс</TableHead>
                 <TableHead>Отзывов</TableHead>
                 <TableHead>Создан</TableHead>
                 <TableHead>S3 / Ошибка</TableHead>
@@ -60,7 +59,7 @@ export default function ParserTasksPage() {
             <TableBody>
               {data.items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-text-secondary py-12">
+                  <TableCell colSpan={6} className="text-center text-text-secondary py-12">
                     Задач пока нет
                   </TableCell>
                 </TableRow>
@@ -71,9 +70,6 @@ export default function ParserTasksPage() {
                   <TableCell><Badge variant="muted">{task.source}</Badge></TableCell>
                   <TableCell>
                     <Badge variant={STATUS_VARIANT[task.status] ?? 'muted'}>{task.status}</Badge>
-                  </TableCell>
-                  <TableCell className="text-text-secondary">
-                    {Math.round(task.progress * 100)}%
                   </TableCell>
                   <TableCell>{task.reviewCount ?? '—'}</TableCell>
                   <TableCell className="text-text-secondary">
