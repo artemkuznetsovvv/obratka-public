@@ -27,7 +27,7 @@ public sealed class AuthController(
     {
         var existing = await userManager.FindByEmailAsync(request.Email);
         if (existing is not null)
-            return BadRequest(new { error = "Email already registered" });
+            return BadRequest(new { error = "Этот email уже зарегистрирован" });
 
         var user = new ApplicationUser
         {
@@ -92,17 +92,17 @@ public sealed class AuthController(
     {
         var user = await userManager.FindByEmailAsync(request.Email);
         if (user is null)
-            return Unauthorized(new { error = "Invalid email or password" });
+            return Unauthorized(new { error = "Неверный email или пароль" });
 
         if (user.IsBlocked)
-            return StatusCode(StatusCodes.Status403Forbidden, new { error = "User is blocked" });
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Аккаунт заблокирован" });
 
         var check = await signInManager.CheckPasswordSignInAsync(user, request.Password, lockoutOnFailure: true);
         if (!check.Succeeded)
         {
             if (check.IsLockedOut)
-                return StatusCode(StatusCodes.Status403Forbidden, new { error = "User is locked out" });
-            return Unauthorized(new { error = "Invalid email or password" });
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = "Слишком много неудачных попыток входа. Попробуйте позже" });
+            return Unauthorized(new { error = "Неверный email или пароль" });
         }
 
         return await IssueTokensAsync(user, ct);
@@ -115,13 +115,13 @@ public sealed class AuthController(
     {
         var rawToken = refreshCookie.Read(Request);
         if (string.IsNullOrEmpty(rawToken))
-            return Unauthorized(new { error = "Refresh token missing" });
+            return Unauthorized(new { error = "Сессия не найдена. Войдите снова" });
 
         var entity = await refreshStore.FindActiveAsync(rawToken, ct);
         if (entity is null)
         {
             refreshCookie.Clear(Response);
-            return Unauthorized(new { error = "Refresh token invalid or expired" });
+            return Unauthorized(new { error = "Сессия недействительна или истекла. Войдите снова" });
         }
 
         var user = await userManager.FindByIdAsync(entity.UserId.ToString());
@@ -129,7 +129,7 @@ public sealed class AuthController(
         {
             await refreshStore.RevokeAsync(rawToken, ct);
             refreshCookie.Clear(Response);
-            return Unauthorized(new { error = "User no longer valid" });
+            return Unauthorized(new { error = "Аккаунт недоступен. Войдите снова" });
         }
 
         // rotate refresh token

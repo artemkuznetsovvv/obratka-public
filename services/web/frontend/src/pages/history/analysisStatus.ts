@@ -243,3 +243,26 @@ export function buildDetailStepper(status: string): StepperStep[] {
     { index: 4, label: 'Результаты', state: results },
   ]
 }
+
+// Технические строки job.error / per-source error приходят из Processing Gateway и
+// Parser на английском (они же — машинные логи; менять их в PG нельзя — на них завязаны
+// тесты/контракты). Для UI переводим известные на русский по префиксу; неизвестные
+// (напр. произвольный текст ошибки от LLM) возвращаем как есть, чтобы не потерять детали.
+const ANALYSIS_ERROR_RULES: { match: (e: string) => boolean; ru: string }[] = [
+  { match: (e) => e === 'All sources failed to collect reviews', ru: 'Не удалось собрать отзывы ни из одного источника' },
+  { match: (e) => e.startsWith('All sources failed to start'), ru: 'Не удалось запустить сбор ни по одному источнику' },
+  { match: (e) => e === 'No branches supplied', ru: 'Не выбрано ни одного филиала' },
+  { match: (e) => e === 'No reviews collected from any source', ru: 'Не собрано ни одного отзыва' },
+  { match: (e) => e.startsWith('All collected reviews have empty text'), ru: 'У всех собранных отзывов пустой текст — анализировать нечего' },
+  { match: (e) => e.startsWith('Parser task exceeded timeout'), ru: 'Превышено время сбора отзывов' },
+  { match: (e) => e.startsWith('Parser task not found'), ru: 'Задача сбора не найдена (потеряна или устарела)' },
+]
+
+export function localizeAnalysisError(error: string | null | undefined): string | null {
+  if (!error) return null
+  const trimmed = error.trim()
+  for (const rule of ANALYSIS_ERROR_RULES) {
+    if (rule.match(trimmed)) return rule.ru
+  }
+  return error
+}

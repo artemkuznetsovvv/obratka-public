@@ -51,7 +51,7 @@ public sealed class ReportsController(
 
         var branchList = ParseGuids(branchIds);
         if (branchList is null || branchList.Count == 0)
-            return BadRequest(new { error = "branchIds is required (CSV of guids, at least one)" });
+            return BadRequest(new { error = "Не выбрано ни одного филиала" });
 
         var ownerId = GetUserIdOrNull();
         if (ownerId is null) return Unauthorized();

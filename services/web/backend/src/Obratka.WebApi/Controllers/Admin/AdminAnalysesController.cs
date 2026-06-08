@@ -49,7 +49,7 @@ public sealed class AdminAnalysesController(
     {
         var company = await db.Companies.AsNoTracking()
             .SingleOrDefaultAsync(c => c.Id == request.CompanyId, ct);
-        if (company is null) return NotFound(new { error = "Company not found" });
+        if (company is null) return NotFound(new { error = "Компания не найдена" });
 
         var branches = await db.CompanyBranches.AsNoTracking()
             .Where(b => b.CompanyId == request.CompanyId
@@ -59,7 +59,7 @@ public sealed class AdminAnalysesController(
             .Select(b => new StartAnalysisBranchSpec(b.Id, b.Source, b.ExternalId, b.ExternalUrl!))
             .ToListAsync(ct);
         if (branches.Count == 0)
-            return BadRequest(new { error = "Company has no selected branches with externalId/externalUrl" });
+            return BadRequest(new { error = "У компании нет выбранных филиалов с корректными ссылками для сбора" });
 
         var qaRequest = new StartAnalysisQaRequest(
             request.CompanyId, request.DateFrom, request.DateTo, branches);
@@ -88,10 +88,10 @@ public sealed class AdminAnalysesController(
         CancellationToken ct)
     {
         if (!BranchSources.IsKnown(source))
-            return BadRequest(new { error = $"Unknown source slug: {source}" });
+            return BadRequest(new { error = $"Неизвестный источник: {source}" });
 
         var job = await gateway.GetAnalysisAsync(jobId, ct);
-        if (job is null) return NotFound(new { error = "Analysis job not found" });
+        if (job is null) return NotFound(new { error = "Анализ не найден" });
 
         var branches = await db.CompanyBranches.AsNoTracking()
             .Where(b => b.CompanyId == job.CompanyId
@@ -102,7 +102,7 @@ public sealed class AdminAnalysesController(
             .Select(b => new RestartSourceBranchSpec(b.Id, b.ExternalId, b.ExternalUrl!))
             .ToListAsync(ct);
         if (branches.Count == 0)
-            return BadRequest(new { error = $"No selected branches for source '{source}' on this company" });
+            return BadRequest(new { error = $"Для источника «{source}» у компании нет выбранных филиалов" });
 
         var qaRequest = new RestartSourceQaRequest(branches, request.DateFrom, request.DateTo);
         var response = await gateway.RestartSourceAsync(jobId, source, qaRequest, ct);

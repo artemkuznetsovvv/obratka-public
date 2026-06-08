@@ -66,7 +66,7 @@ public sealed class DashboardMetricsController(
 
         var branchList = ParseGuids(branchIds);
         if (branchList is null || branchList.Count == 0)
-            return BadRequest(new { error = "branchIds is required (CSV of guids, at least one)" });
+            return BadRequest(new { error = "Не выбрано ни одного филиала" });
 
         // Ownership check: тот же паттерн, что в AnalysesController — не палим
         // существование чужого джоба.
@@ -129,7 +129,7 @@ public sealed class DashboardMetricsController(
 
         var branchList = ParseGuids(branchIds);
         if (branchList is null || branchList.Count == 0)
-            return BadRequest(new { error = "branchIds is required (CSV of guids, at least one)" });
+            return BadRequest(new { error = "Не выбрано ни одного филиала" });
 
         var ownerId = GetUserIdOrNull();
         if (ownerId is null) return Unauthorized();
@@ -189,7 +189,7 @@ public sealed class DashboardMetricsController(
 
         var branchList = ParseGuids(branchIds);
         if (branchList is null || branchList.Count == 0)
-            return BadRequest(new { error = "branchIds is required (CSV of guids, at least one)" });
+            return BadRequest(new { error = "Не выбрано ни одного филиала" });
 
         var ownerId = GetUserIdOrNull();
         if (ownerId is null) return Unauthorized();
@@ -248,14 +248,14 @@ public sealed class DashboardMetricsController(
 
         var branchList = ParseGuids(branchIds);
         if (branchList is null || branchList.Count == 0)
-            return BadRequest(new { error = "branchIds is required (CSV of guids, at least one)" });
+            return BadRequest(new { error = "Не выбрано ни одного филиала" });
 
         if (string.IsNullOrWhiteSpace(sentiment))
-            return BadRequest(new { error = "sentiment is required (one of: позитивный, нейтральный, негативный)" });
+            return BadRequest(new { error = "Не указана тональность (позитивный, нейтральный или негативный)" });
 
         // Защита от мусора в query — sentiment строго один из 3 schema 2.0 значений.
         if (sentiment is not "позитивный" and not "нейтральный" and not "негативный")
-            return BadRequest(new { error = "sentiment must be one of: позитивный, нейтральный, негативный" });
+            return BadRequest(new { error = "Тональность должна быть одной из: позитивный, нейтральный, негативный" });
 
         var ownerId = GetUserIdOrNull();
         if (ownerId is null) return Unauthorized();
@@ -311,7 +311,7 @@ public sealed class DashboardMetricsController(
 
         var branchList = ParseGuids(branchIds);
         if (branchList is null || branchList.Count == 0)
-            return BadRequest(new { error = "branchIds is required (CSV of guids, at least one)" });
+            return BadRequest(new { error = "Не выбрано ни одного филиала" });
 
         var ownerId = GetUserIdOrNull();
         if (ownerId is null) return Unauthorized();
@@ -366,7 +366,7 @@ public sealed class DashboardMetricsController(
 
         var branchList = ParseGuids(branchIds);
         if (branchList is null || branchList.Count == 0)
-            return BadRequest(new { error = "branchIds is required (CSV of guids, at least one)" });
+            return BadRequest(new { error = "Не выбрано ни одного филиала" });
 
         var ownerId = GetUserIdOrNull();
         if (ownerId is null) return Unauthorized();
@@ -422,7 +422,7 @@ public sealed class DashboardMetricsController(
 
         var branchList = ParseGuids(branchIds);
         if (branchList is null || branchList.Count == 0)
-            return BadRequest(new { error = "branchIds is required (CSV of guids, at least one)" });
+            return BadRequest(new { error = "Не выбрано ни одного филиала" });
 
         var ownerId = GetUserIdOrNull();
         if (ownerId is null) return Unauthorized();
@@ -476,10 +476,10 @@ public sealed class DashboardMetricsController(
 
         var branchList = ParseGuids(branchIds);
         if (branchList is null || branchList.Count == 0)
-            return BadRequest(new { error = "branchIds is required (CSV of guids, at least one)" });
+            return BadRequest(new { error = "Не выбрано ни одного филиала" });
 
         if (!TryParseWindow(window, out var windowEnum))
-            return BadRequest(new { error = "window must be one of: 7d, 30d, 3m, 6m, 12m" });
+            return BadRequest(new { error = "Окно должно быть одним из: 7d, 30d, 3m, 6m, 12m" });
 
         var ownerId = GetUserIdOrNull();
         if (ownerId is null) return Unauthorized();

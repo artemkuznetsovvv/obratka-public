@@ -42,11 +42,11 @@ public sealed class AnalysesController(
 
         var company = await db.Companies.AsNoTracking()
             .SingleOrDefaultAsync(c => c.Id == request.CompanyId && c.OwnerUserId == ownerId, ct);
-        if (company is null) return NotFound(new { error = "Company not found" });
+        if (company is null) return NotFound(new { error = "Компания не найдена" });
 
         if (request.PeriodFrom is not null && request.PeriodTo is not null
             && request.PeriodFrom > request.PeriodTo)
-            return BadRequest(new { error = "PeriodFrom must be <= PeriodTo" });
+            return BadRequest(new { error = "Дата начала периода должна быть не позже даты окончания" });
 
         // Грузим активные физ. филиалы вместе с их активными провайдерскими карточками.
         // Активная карточка = (LogicalBranch.IsSelected=true И CompanyBranch.IsSelected=true)

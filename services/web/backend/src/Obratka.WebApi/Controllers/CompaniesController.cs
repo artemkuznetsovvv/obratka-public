@@ -32,7 +32,7 @@ public sealed class CompaniesController(
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         if (cities.Count == 0)
-            return BadRequest(new { error = "At least one city is required" });
+            return BadRequest(new { error = "Укажите хотя бы один город" });
 
         var company = new Company
         {
@@ -70,7 +70,7 @@ public sealed class CompaniesController(
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         if (cities.Count == 0)
-            return BadRequest(new { error = "At least one city is required" });
+            return BadRequest(new { error = "Укажите хотя бы один город" });
 
         var company = await db.Companies
             .SingleOrDefaultAsync(c => c.Id == id && c.OwnerUserId == ownerId, ct);
@@ -152,7 +152,7 @@ public sealed class CompaniesController(
         if (ownerId is null) return Unauthorized();
 
         if (string.IsNullOrWhiteSpace(city))
-            return BadRequest(new { error = "city query parameter is required" });
+            return BadRequest(new { error = "Не указан город (параметр city)" });
 
         var company = await db.Companies
             .AsNoTracking()
@@ -192,12 +192,12 @@ public sealed class CompaniesController(
 
         var selectedIds = request.BranchIds.ToHashSet();
         if (selectedIds.Count == 0)
-            return BadRequest(new { error = "No branch ids in request" });
+            return BadRequest(new { error = "Не выбрано ни одного филиала" });
 
         var ownedIds = company.Branches.Select(b => b.Id).ToHashSet();
         var unknown = selectedIds.Where(g => !ownedIds.Contains(g)).ToList();
         if (unknown.Count > 0)
-            return BadRequest(new { error = $"Branch ids do not belong to this company: {string.Join(", ", unknown)}" });
+            return BadRequest(new { error = $"Часть филиалов не принадлежит этой компании: {string.Join(", ", unknown)}" });
 
         // Submission of step 2 fully overrides the picks: explicit branches become selected, the rest demote to candidate.
         foreach (var branch in company.Branches)
@@ -271,11 +271,11 @@ public sealed class CompaniesController(
         foreach (var ig in ignored) allRequested.Add(ig);
         var unknown = allRequested.Where(b => !ownedBranchIds.Contains(b)).ToList();
         if (unknown.Count > 0)
-            return BadRequest(new { error = $"Branch ids do not belong to this company: {string.Join(", ", unknown)}" });
+            return BadRequest(new { error = $"Часть филиалов не принадлежит этой компании: {string.Join(", ", unknown)}" });
 
         var duplicates = request.IgnoredBranchIds.Intersect(providersInRequest).ToList();
         if (duplicates.Count > 0)
-            return BadRequest(new { error = $"Branch ids appear both in groups and ignored: {string.Join(", ", duplicates)}" });
+            return BadRequest(new { error = $"Часть филиалов указана и в группах, и в игнорируемых: {string.Join(", ", duplicates)}" });
 
         // 1. Сносим старые LogicalBranch для этой компании. CompanyBranch.LogicalBranchId
         //    автоматически сбросится в null (SetNull on delete).
@@ -294,7 +294,7 @@ public sealed class CompaniesController(
         foreach (var grp in request.Groups)
         {
             if (grp.Providers.Count == 0)
-                return BadRequest(new { error = "Group must contain at least one provider" });
+                return BadRequest(new { error = "Группа должна содержать хотя бы один источник" });
 
             var logical = new LogicalBranch
             {
@@ -311,7 +311,7 @@ public sealed class CompaniesController(
             foreach (var prov in grp.Providers)
             {
                 if (assignments.ContainsKey(prov.BranchId))
-                    return BadRequest(new { error = $"Branch id {prov.BranchId} appears in more than one group" });
+                    return BadRequest(new { error = $"Филиал {prov.BranchId} указан более чем в одной группе" });
                 assignments[prov.BranchId] = (logical.Id, prov.IsEnabled);
             }
         }

@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils'
 import {
   approximateProgress,
   isTerminal,
+  localizeAnalysisError,
   SOURCE_LABEL,
   statusMetaFor,
 } from './analysisStatus'
@@ -163,8 +164,11 @@ function AnalysisCard({ job, companyName }: { job: AnalysisJob; companyName: str
               )}
             </div>
             {job.error && (
-              <div className="mt-2 text-xs text-rose-700 truncate" title={job.error}>
-                {job.error}
+              <div
+                className="mt-2 text-xs text-rose-700 truncate"
+                title={localizeAnalysisError(job.error) ?? undefined}
+              >
+                {localizeAnalysisError(job.error)}
               </div>
             )}
           </div>

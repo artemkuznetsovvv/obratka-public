@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { adminAnalysesApi, type CollectionProgressEntry, type JobBlobItem } from '@/api/admin'
+import { localizeAnalysisError } from '@/pages/history/analysisStatus'
 import { cn } from '@/lib/utils'
 
 const JOB_STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
@@ -146,7 +147,7 @@ export default function AnalysisDetailPage() {
             </div>
             {jobQuery.data.error && (
               <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-                <span className="font-medium">Ошибка job:</span> {jobQuery.data.error}
+                <span className="font-medium">Ошибка job:</span> {localizeAnalysisError(jobQuery.data.error)}
               </div>
             )}
           </Card>
@@ -402,7 +403,7 @@ function SourceRow({
       <TableCell className="text-text-secondary">{entry.progress}%</TableCell>
       <TableCell>{entry.reviewCount ?? '—'}</TableCell>
       <TableCell className={cn('max-w-[20ch] truncate text-xs', entry.error && 'text-destructive')}>
-        {entry.error ?? '—'}
+        {localizeAnalysisError(entry.error) ?? '—'}
       </TableCell>
       <TableCell className="text-right">
         <Button variant="outline" size="sm" onClick={onRestart}>

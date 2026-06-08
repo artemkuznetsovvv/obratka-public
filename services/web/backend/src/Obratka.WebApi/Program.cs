@@ -85,6 +85,7 @@ builder.Services
         options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(5);
     })
     .AddEntityFrameworkStores<WebApiDbContext>()
+    .AddErrorDescriber<RussianIdentityErrorDescriber>()
     .AddDefaultTokenProviders();
 
 // ---- JWT auth ----

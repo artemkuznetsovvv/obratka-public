@@ -44,7 +44,7 @@ public sealed class MonitoringsController(
 
         var company = await db.Companies.AsNoTracking()
             .SingleOrDefaultAsync(c => c.Id == request.CompanyId && c.OwnerUserId == ownerId, ct);
-        if (company is null) return NotFound(new { error = "Company not found" });
+        if (company is null) return NotFound(new { error = "Компания не найдена" });
 
         var windowDays = request.WindowDays <= 0 ? DefaultWindowDays : request.WindowDays;
         if (!TryValidateSettings(request.Sources, request.BranchIds, request.Frequency, windowDays,

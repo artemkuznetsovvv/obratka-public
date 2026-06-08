@@ -35,6 +35,7 @@ import {
   buildDetailStepper,
   buildPipelineStages,
   isTerminal,
+  localizeAnalysisError,
   SOURCE_LABEL,
   statusMetaFor,
   type PipelineStage,
@@ -276,7 +277,7 @@ export default function HistoryDetailPage() {
                   <AlertCircle size={18} className="text-rose-700 shrink-0 mt-0.5" />
                   <div className="text-sm text-rose-900">
                     <div className="font-medium mb-0.5">Ошибка</div>
-                    <div className="text-rose-800 whitespace-pre-line">{job.error}</div>
+                    <div className="text-rose-800 whitespace-pre-line">{localizeAnalysisError(job.error)}</div>
                   </div>
                 </div>
               </Card>
@@ -589,8 +590,11 @@ function SourceProgressRow({
       </div>
       <ProgressBar value={pct} tone={entryMeta.tone} />
       {entry.error && (
-        <div className="mt-1 text-xs text-rose-700 truncate" title={entry.error}>
-          {entry.error}
+        <div
+          className="mt-1 text-xs text-rose-700 truncate"
+          title={localizeAnalysisError(entry.error) ?? undefined}
+        >
+          {localizeAnalysisError(entry.error)}
         </div>
       )}
     </div>
