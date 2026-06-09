@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcessingGateway.Application.Messaging.Contracts;
 using ProcessingGateway.Domain;
 using ProcessingGateway.Infrastructure.Database;
+using LogContext = Serilog.Context.LogContext;
 
 namespace ProcessingGateway.Application.Pipeline;
 
@@ -32,7 +33,9 @@ public sealed class AnalysisOrchestrator
 
     public async Task AdvanceAfterCollectionAsync(Guid jobId, CancellationToken ct = default)
     {
+        using var _ = LogContext.PushProperty("AnalysisJobId", jobId);
         var job = await _db.AnalysisJobs.SingleAsync(j => j.Id == jobId, ct);
+        using var __ = LogContext.PushProperty("CompanyId", job.CompanyId);
 
         if (job.Status != AnalysisJobStatus.Collecting)
         {
@@ -55,7 +58,7 @@ public sealed class AnalysisOrchestrator
             await _publisher.Publish(new AnalysisCompletedEvent(
                 jobId, job.CompanyId,
                 AnalysisCompletionStatus.Failed,
-                ReviewCount: 0), ct);
+                ReviewCount: 0), pubCtx => pubCtx.CorrelationId = jobId, ct);
 
             _logger.LogWarning("Job {AnalysisJobId} → failed (all sources failed)", jobId);
             return;

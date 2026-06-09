@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using ProcessingGateway.Domain;
 using ProcessingGateway.Infrastructure.Database;
+using Serilog.Context;
 
 namespace ProcessingGateway.Application.Pipeline;
 
@@ -73,9 +74,12 @@ public sealed class AutoFinalizeService : BackgroundService
 
         foreach (var job in stale)
         {
+            using var _ = LogContext.PushProperty("AnalysisJobId", job.Id);
+            using var __ = LogContext.PushProperty("CompanyId", job.CompanyId);
             var partial = job.CollectionProgress.Values.Any(e => e.Status == "failed");
             job.Status = partial ? AnalysisJobStatus.Partial : AnalysisJobStatus.Completed;
             job.CompletedAt = DateTimeOffset.UtcNow;
+            _logger.LogInformation("AutoFinalize: job {AnalysisJobId} → {Status}", job.Id, job.Status);
         }
 
         await db.SaveChangesAsync(ct);

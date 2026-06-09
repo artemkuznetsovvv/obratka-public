@@ -4,6 +4,7 @@ using ProcessingGateway.Application.Messaging.Contracts;
 using ProcessingGateway.Domain;
 using ProcessingGateway.Infrastructure.Database;
 using ProcessingGateway.Infrastructure.Storage;
+using LogContext = Serilog.Context.LogContext;
 
 namespace ProcessingGateway.Application.Pipeline;
 
@@ -53,6 +54,9 @@ public sealed class LlmResultIngestor
                 jobId);
             return;
         }
+
+        // CorrelationId/AnalysisJobId уже в scope из LlmResultMessageConsumer; добавим CompanyId.
+        using var _companyScope = LogContext.PushProperty("CompanyId", job.CompanyId);
 
         // Идемпотентность: если уже завершили обработку, повторное применение не нужно.
         if (job.Status is AnalysisJobStatus.ComputingAggregates
@@ -140,7 +144,7 @@ public sealed class LlmResultIngestor
             AnalysisJobId: jobId,
             CompanyId: job.CompanyId,
             Status: completionStatus,
-            ReviewCount: job.ReviewCount), ct);
+            ReviewCount: job.ReviewCount), pubCtx => pubCtx.CorrelationId = jobId, ct);
 
         await _db.SaveChangesAsync(ct);
 
@@ -168,7 +172,7 @@ public sealed class LlmResultIngestor
             AnalysisJobId: job.Id,
             CompanyId: job.CompanyId,
             Status: AnalysisCompletionStatus.Failed,
-            ReviewCount: job.ReviewCount), ct);
+            ReviewCount: job.ReviewCount), pubCtx => pubCtx.CorrelationId = job.Id, ct);
 
         await _db.SaveChangesAsync(ct);
 

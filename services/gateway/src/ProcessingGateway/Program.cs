@@ -187,6 +187,18 @@ app.UseSerilogRequestLogging(options =>
         if (elapsedMs > 1000) return LogEventLevel.Warning;
         return LogEventLevel.Debug;
     };
+    // Поля ТЗ на строке request-summary: направление + сквозной трейс анализа (из route {jobId}
+    // у status-эндпоинта или из HttpContext.Items, куда его кладёт QA-контроллер старта).
+    options.EnrichDiagnosticContext = (diag, httpContext) =>
+    {
+        diag.Set("Direction", "incoming");
+        if (httpContext.Items.TryGetValue("AnalysisJobId", out var jobId) && jobId is not null)
+            diag.Set("AnalysisJobId", jobId);
+        else if (httpContext.GetRouteValue("jobId") is { } routeJob)
+            diag.Set("AnalysisJobId", routeJob);
+        if (httpContext.Items.TryGetValue("CompanyId", out var companyId) && companyId is not null)
+            diag.Set("CompanyId", companyId);
+    };
 });
 
 // Health endpoints — голые `app.MapGet`, ВНЕ health-check-infrastructure ASP.NET Core.

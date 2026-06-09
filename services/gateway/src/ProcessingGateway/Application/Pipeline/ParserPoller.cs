@@ -94,6 +94,7 @@ public sealed class ParserPoller : BackgroundService
     private async Task ProcessJobAsync(IServiceProvider scoped, AnalysisJob job, CancellationToken ct)
     {
         using var _ = LogContext.PushProperty("AnalysisJobId", job.Id);
+        using var __ = LogContext.PushProperty("CompanyId", job.CompanyId);
 
         var db = scoped.GetRequiredService<ProcessingDbContext>();
         var parser = scoped.GetRequiredService<IParserClient>();

@@ -115,7 +115,7 @@ ProcessingGateway/
 | `Llm__ResultQueue` | `llm.results` | очередь, на которую подписан PG (`callback_queue` из сообщения) |
 | `Llm__StatusBaseUrl` | `https://llm.internal/status` | reconciliation REST `/status/{jobId}` |
 | `Llm__ResultTimeoutMinutes` | `30` | если ответа нет → reconciliation |
-| `Seq__Url` | `http://seq:5341` | централизованные логи (ADR-008) |
+| `Seq__ServerUrl` | `http://seq:5341` | централизованные логи (ADR-008); опц. `Seq__ApiKey` |
 
 `processing_user` и `analytics_reader` — разные роли Postgres. PG пишет полным набором прав;
 Web API подключается отдельным пользователем `analytics_reader` с `SELECT` на 3 таблицы (ADR-011).
@@ -618,15 +618,29 @@ Live-мониторинг идёт по тому же пути, но с `dateFro
 
 ## Логирование и Correlation ID (ADR-008)
 
-- Serilog → Seq, sink `WriteTo.Seq(Seq__Url)`.
+Единая модель трейсинга (см. корневой `../logging-trace-plan.md`): **первичный сквозной трейс
+на анализ = `AnalysisJobId`** (фильтр в Seq по нему даёт весь анализ через Web API + PG + Parser);
+`CorrelationId` (`X-Correlation-ID`) — id одной HTTP-цепочки. Имена свойств `LogContext` едины
+между сервисами: `CorrelationId`, `AnalysisJobId`, `CompanyId`, `Initiator` (в PG всегда
+`system:*` — про пользователей PG не знает), `Source`/`TaskId` (в Parser).
+
+- Serilog → Seq, sink `WriteTo.Seq(Seq:ServerUrl)` (+ опц. `Seq:ApiKey`).
 - Enricher: `Service = "ProcessingGateway"`, `MachineName`.
 - HTTP middleware читает `X-Correlation-ID`, иначе генерирует Guid.ToString("N");
   кладёт в `LogContext` и отдаёт обратно в response header.
 - Каждый исходящий вызов `ParserHttpClient` добавляет `X-Correlation-ID` (DelegatingHandler).
 - MassTransit `CorrelationId` envelope ↔ Serilog `LogContext.PushProperty("CorrelationId", ...)`
-  в каждом consumer'е.
-- В каждом consumer'е также пушим `AnalysisJobId`, `CompanyId` — для трейсинга через UI Seq.
+  в каждом consumer'е. На исходящих `Send`/`Publish` (LlmRequestMessage, AnalysisCompletedEvent,
+  StartAnalysisCommand) envelope `CorrelationId = AnalysisJobId` выставляется явно — гэп закрыт
+  (`LlmDispatcher`, `AnalysisOrchestrator`, `LlmResultIngestor`, `QaAnalysesController`).
+- В каждом consumer'е/pipeline-классе пушим `AnalysisJobId`, `CompanyId` — для трейсинга через Seq.
+- `UseSerilogRequestLogging.EnrichDiagnosticContext` кладёт на строку request-summary `Direction`,
+  и `AnalysisJobId` (из route `{jobId}` status-эндпоинта или `HttpContext.Items`).
+- `QaAnalysesController` (`POST /api/qa/analyses`) — **pivot**: здесь рождается `AnalysisJobId`,
+  а `CorrelationId` запроса уже в scope → одна строка связывает цепочку запроса Web API с трейсом анализа.
 - `Microsoft.AspNetCore` и `System.Net.Http` — на `Warning` (как в ADR-008 §template).
+- Внешний LLM (Python) в Seq не пишет: в таймлайне по `AnalysisJobId` ожидаемый разрыв на время
+  работы LLM, затем `LlmResultMessageConsumer` восстанавливает `CorrelationId=AnalysisJobId` — норма.
 
 Ключевые события (ADR-008 §«Что и как логируется»):
 - Information: задача Parser создана, отзывы сохранены (`count`), LLM pipeline запущен,

@@ -30,6 +30,7 @@ public sealed class AggregatesReadyEventConsumer : IConsumer<AggregatesReadyEven
     {
         var msg = context.Message;
         using var _ = LogContext.PushProperty("AnalysisJobId", msg.AnalysisJobId);
+        using var __ = LogContext.PushProperty("CompanyId", msg.CompanyId);
 
         var job = await _db.AnalysisJobs.FirstOrDefaultAsync(
             j => j.Id == msg.AnalysisJobId, context.CancellationToken);

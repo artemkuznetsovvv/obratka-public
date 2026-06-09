@@ -37,6 +37,9 @@ public sealed class StartAnalysisCommandConsumer : IConsumer<StartAnalysisComman
     public async Task Consume(ConsumeContext<StartAnalysisCommand> context)
     {
         var msg = context.Message;
+        // CorrelationId из envelope (его ставит QA-controller = jobId); фолбэк — AnalysisJobId.
+        // Так логи создания parser-задач делят CorrelationId с цепочкой запроса Web API.
+        using var _corr = LogContext.PushProperty("CorrelationId", context.CorrelationId ?? msg.AnalysisJobId);
         using var _ = LogContext.PushProperty("AnalysisJobId", msg.AnalysisJobId);
         using var __ = LogContext.PushProperty("CompanyId", msg.CompanyId);
 

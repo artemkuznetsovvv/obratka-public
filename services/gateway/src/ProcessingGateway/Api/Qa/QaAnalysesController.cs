@@ -5,6 +5,7 @@ using ProcessingGateway.Api;
 using ProcessingGateway.Application.Messaging.Contracts;
 using ProcessingGateway.Domain;
 using ProcessingGateway.Infrastructure.Database;
+using LogContext = Serilog.Context.LogContext;
 
 namespace ProcessingGateway.Api.Qa;
 
@@ -51,6 +52,14 @@ public sealed class QaAnalysesController : ControllerBase
             return BadRequest(new { error = "branches must contain at least one element" });
 
         var jobId = request.AnalysisJobId ?? Guid.NewGuid();
+
+        // PG-сторона pivot: здесь рождается AnalysisJobId. CorrelationId запроса уже в LogContext
+        // (CorrelationIdMiddleware), поэтому нижняя строка связывает цепочку запроса Web API с
+        // новым сквозным трейсом анализа. Envelope CorrelationId=jobId — трассировка команды далее.
+        using var _ = LogContext.PushProperty("AnalysisJobId", jobId);
+        using var __ = LogContext.PushProperty("CompanyId", request.CompanyId);
+        HttpContext.Items["AnalysisJobId"] = jobId; // для строки request-summary (EnrichDiagnosticContext)
+
         var cmd = new StartAnalysisCommand(
             AnalysisJobId: jobId,
             CompanyId: request.CompanyId,
@@ -58,7 +67,7 @@ public sealed class QaAnalysesController : ControllerBase
             DateTo: request.DateTo,
             Branches: request.Branches);
 
-        await _publisher.Publish(cmd, ct);
+        await _publisher.Publish(cmd, pubCtx => pubCtx.CorrelationId = jobId, ct);
 
         // MassTransit EF Outbox: сообщение шипится в брокер только после
         // DbContext.SaveChangesAsync(). Без этого вызова publish осядет в outbox-таблице
@@ -67,8 +76,8 @@ public sealed class QaAnalysesController : ControllerBase
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
-            "QA published StartAnalysisCommand: job={AnalysisJobId} branches={BranchCount}",
-            jobId, request.Branches.Count);
+            "Analysis job {AnalysisJobId} created for company {CompanyId} (branches={BranchCount})",
+            jobId, request.CompanyId, request.Branches.Count);
 
         return AcceptedAtAction(
             actionName: null,
@@ -224,10 +233,12 @@ public sealed class QaAnalysesController : ControllerBase
     [HttpPost("{jobId:guid}/cancel")]
     public async Task<IActionResult> Cancel(Guid jobId, [FromQuery] string? reason, CancellationToken ct)
     {
+        using var _ = LogContext.PushProperty("AnalysisJobId", jobId);
         var job = await _db.AnalysisJobs.FirstOrDefaultAsync(j => j.Id == jobId, ct);
         if (job is null) return NotFound();
         if (job.Status is AnalysisJobStatus.Completed or AnalysisJobStatus.Partial or AnalysisJobStatus.Failed)
             return Conflict(new { error = $"Job already in terminal status {job.Status.ToWire()}" });
+        using var __ = LogContext.PushProperty("CompanyId", job.CompanyId);
 
         job.Status = AnalysisJobStatus.Failed;
         job.Error = string.IsNullOrWhiteSpace(reason) ? "manual cancel via QA" : reason;
@@ -237,7 +248,7 @@ public sealed class QaAnalysesController : ControllerBase
             AnalysisJobId: jobId,
             CompanyId: job.CompanyId,
             Status: AnalysisCompletionStatus.Failed,
-            ReviewCount: job.ReviewCount), ct);
+            ReviewCount: job.ReviewCount), pubCtx => pubCtx.CorrelationId = jobId, ct);
         await _db.SaveChangesAsync(ct);
 
         _logger.LogWarning("QA cancel: job {AnalysisJobId} → failed: {Error}", jobId, job.Error);
@@ -249,11 +260,14 @@ public sealed class QaAnalysesController : ControllerBase
     [HttpPost("{jobId:guid}/finalize")]
     public async Task<IActionResult> Finalize(Guid jobId, CancellationToken ct)
     {
+        using var _ = LogContext.PushProperty("AnalysisJobId", jobId);
         var job = await _db.AnalysisJobs.AsNoTracking()
             .FirstOrDefaultAsync(j => j.Id == jobId, ct);
         if (job is null) return NotFound();
+        using var __ = LogContext.PushProperty("CompanyId", job.CompanyId);
 
-        await _publisher.Publish(new AggregatesReadyEvent(jobId, job.CompanyId), ct);
+        await _publisher.Publish(new AggregatesReadyEvent(jobId, job.CompanyId),
+            pubCtx => pubCtx.CorrelationId = jobId, ct);
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation("QA finalize: published AggregatesReadyEvent for {AnalysisJobId}", jobId);

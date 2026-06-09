@@ -5,6 +5,7 @@ using ProcessingGateway.Application.Messaging.Contracts;
 using ProcessingGateway.Domain;
 using ProcessingGateway.Infrastructure.Database;
 using ProcessingGateway.Infrastructure.Storage;
+using LogContext = Serilog.Context.LogContext;
 
 namespace ProcessingGateway.Application.Pipeline;
 
@@ -46,7 +47,9 @@ public sealed class LlmDispatcher
 
     public async Task DispatchAsync(Guid jobId, CancellationToken ct = default)
     {
+        using var _ = LogContext.PushProperty("AnalysisJobId", jobId);
         var job = await _db.AnalysisJobs.SingleAsync(j => j.Id == jobId, ct);
+        using var __ = LogContext.PushProperty("CompanyId", job.CompanyId);
 
         // Достаём отзывы, привязанные к job через analysis_job_reviews. Это решает «какие
         // именно отзывы пошли в этот анализ» (вариант B Этапа 5).
@@ -118,13 +121,17 @@ public sealed class LlmDispatcher
 
         // Send ДО SaveChanges — Outbox присоединит сообщение к транзакции и отправит после commit.
         var endpoint = await _sendEndpoints.GetSendEndpoint(new Uri($"queue:{requestQueue}"));
+        // Envelope CorrelationId = AnalysisJobId (ADR-008/CLAUDE.md) — сквозной трейс LLM-запроса
+        // через outbox/_error. Python-LLM читает body (snake_case), envelope ему безразличен —
+        // wire-контракт LlmRequestMessage не меняем.
         await endpoint.Send(new LlmRequestMessage(
             AnalysisJobId: jobId,
             CompanyId: job.CompanyId,
             PayloadUrl: payloadUrl,
             ReviewCount: reviewsForLlm.Count,
             SchemaVersion: CurrentSchemaVersion,
-            CallbackQueue: callbackQueue), ct);
+            CallbackQueue: callbackQueue),
+            sendCtx => sendCtx.CorrelationId = jobId, ct);
 
         await _db.SaveChangesAsync(ct);
 
