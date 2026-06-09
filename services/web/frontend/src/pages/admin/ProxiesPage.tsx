@@ -11,7 +11,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { adminProxiesApi, type CreateParserProxyRequest } from '@/api/admin'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { adminProxiesApi, adminTelegramProxiesApi, type CreateParserProxyRequest } from '@/api/admin'
 
 const proxySchema = z.object({
   host: z.string().min(1, 'Укажите host'),
@@ -35,32 +36,78 @@ const fromLocalInput = (s: string): string | null => (s ? new Date(s).toISOStrin
 const isExpired = (iso: string | null) => iso !== null && new Date(iso) <= new Date()
 
 export default function ProxiesPage() {
+  return (
+    <AppLayout breadcrumbs={[{ label: 'Админ' }, { label: 'Прокси' }]}>
+      <div className="mb-6">
+        <h1 className="text-h1 text-text-primary">Прокси</h1>
+        <p className="text-body text-text-secondary mt-1">
+          Пулы прокси для Parser-Service (сбор отзывов) и Telegram-бота (обход блокировки api.telegram.org).
+        </p>
+      </div>
+
+      <Tabs defaultValue="parser">
+        <TabsList className="mb-4">
+          <TabsTrigger value="parser">Parser-Service</TabsTrigger>
+          <TabsTrigger value="telegram">Telegram-бот</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="parser">
+          <ProxyManager
+            api={adminProxiesApi}
+            queryKey={['admin', 'proxies']}
+            defaultProtocol="http"
+            description="CRUD проксируется в Parser-Service. ID — числовой (`int`), назначается на стороне Parser-Service."
+          />
+        </TabsContent>
+
+        <TabsContent value="telegram">
+          <ProxyManager
+            api={adminTelegramProxiesApi}
+            queryKey={['admin', 'telegram-proxies']}
+            defaultProtocol="socks5"
+            description="Пул прокси Telegram-бота (хранится в Web API). При connectivity-сбое long-poll бот автоматически переключается на следующий доступный прокси, упавший уходит в cooldown."
+          />
+        </TabsContent>
+      </Tabs>
+    </AppLayout>
+  )
+}
+
+interface ProxyManagerProps {
+  api: typeof adminProxiesApi
+  queryKey: string[]
+  defaultProtocol: 'http' | 'socks5'
+  description: string
+}
+
+// Переиспользуемый менеджер пула прокси (одинаковая модель/CRUD у Parser и Telegram).
+function ProxyManager({ api, queryKey, defaultProtocol, description }: ProxyManagerProps) {
   const queryClient = useQueryClient()
   const [showAdd, setShowAdd] = useState(false)
   const [editingExpiresId, setEditingExpiresId] = useState<number | null>(null)
   const [editingExpiresValue, setEditingExpiresValue] = useState('')
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['admin', 'proxies'],
-    queryFn: () => adminProxiesApi.list(),
+    queryKey,
+    queryFn: () => api.list(),
   })
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin', 'proxies'] })
+  const invalidate = () => queryClient.invalidateQueries({ queryKey })
 
   const create = useMutation({
-    mutationFn: (req: CreateParserProxyRequest) => adminProxiesApi.create(req),
+    mutationFn: (req: CreateParserProxyRequest) => api.create(req),
     onSuccess: () => {
       invalidate()
       setShowAdd(false)
     },
   })
-  const del = useMutation({ mutationFn: (id: number) => adminProxiesApi.delete(id), onSuccess: invalidate })
-  const disable = useMutation({ mutationFn: (id: number) => adminProxiesApi.disable(id), onSuccess: invalidate })
-  const enable = useMutation({ mutationFn: (id: number) => adminProxiesApi.enable(id), onSuccess: invalidate })
-  const resetHealth = useMutation({ mutationFn: (id: number) => adminProxiesApi.resetHealth(id), onSuccess: invalidate })
+  const del = useMutation({ mutationFn: (id: number) => api.delete(id), onSuccess: invalidate })
+  const disable = useMutation({ mutationFn: (id: number) => api.disable(id), onSuccess: invalidate })
+  const enable = useMutation({ mutationFn: (id: number) => api.enable(id), onSuccess: invalidate })
+  const resetHealth = useMutation({ mutationFn: (id: number) => api.resetHealth(id), onSuccess: invalidate })
   const setExpires = useMutation({
     mutationFn: ({ id, expiresAt }: { id: number; expiresAt: string | null }) =>
-      adminProxiesApi.setExpiresAt(id, expiresAt),
+      api.setExpiresAt(id, expiresAt),
     onSuccess: () => {
       invalidate()
       setEditingExpiresId(null)
@@ -77,15 +124,10 @@ export default function ProxiesPage() {
   }
 
   return (
-    <AppLayout breadcrumbs={[{ label: 'Админ' }, { label: 'Прокси' }]}>
-      <div className="mb-8 flex items-start justify-between">
-        <div>
-          <h1 className="text-h1 text-text-primary">Прокси Parser-Service</h1>
-          <p className="text-body text-text-secondary mt-1">
-            CRUD проксируется в Parser-Service. ID — числовой (`int`), назначается на стороне Parser-Service.
-          </p>
-        </div>
-        <Button onClick={() => setShowAdd((v) => !v)} className="gap-2">
+    <>
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <p className="text-sm text-text-secondary max-w-3xl">{description}</p>
+        <Button onClick={() => setShowAdd((v) => !v)} className="gap-2 shrink-0">
           <Plus size={16} />
           {showAdd ? 'Скрыть форму' : 'Добавить прокси'}
         </Button>
@@ -94,6 +136,7 @@ export default function ProxiesPage() {
       {showAdd && (
         <Card className="p-6 mb-6">
           <AddProxyForm
+            defaultProtocol={defaultProtocol}
             isSubmitting={create.isPending}
             submitError={create.error ? (create.error as Error).message : null}
             onSubmit={(values) => create.mutate(values)}
@@ -222,7 +265,7 @@ export default function ProxiesPage() {
           </Table>
         )}
       </Card>
-    </AppLayout>
+    </>
   )
 }
 
@@ -230,18 +273,19 @@ interface AddProxyFormProps {
   onSubmit: (values: CreateParserProxyRequest) => void
   isSubmitting: boolean
   submitError: string | null
+  defaultProtocol: 'http' | 'socks5'
 }
 
 type ProxyFormValues = z.infer<typeof proxySchema>
 
-function AddProxyForm({ onSubmit, isSubmitting, submitError }: AddProxyFormProps) {
+function AddProxyForm({ onSubmit, isSubmitting, submitError, defaultProtocol }: AddProxyFormProps) {
   const {
     register,
     handleSubmit,
     formState: { errors },
   } = useForm<ProxyFormValues>({
     resolver: zodResolver(proxySchema),
-    defaultValues: { protocol: 'http', port: 8080 },
+    defaultValues: { protocol: defaultProtocol, port: defaultProtocol === 'socks5' ? 1080 : 8080 },
   })
 
   return (

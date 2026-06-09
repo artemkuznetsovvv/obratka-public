@@ -26,6 +26,7 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
     public DbSet<UserRequest> UserRequests => Set<UserRequest>();
     public DbSet<TelegramLinkToken> TelegramLinkTokens => Set<TelegramLinkToken>();
     public DbSet<AnalysisNotification> AnalysisNotifications => Set<AnalysisNotification>();
+    public DbSet<TelegramProxy> TelegramProxies => Set<TelegramProxy>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -210,6 +211,20 @@ public class WebApiDbContext(DbContextOptions<WebApiDbContext> options)
             b.HasIndex(x => x.JobId).IsUnique();
             // Частичный индекс под выборку «ещё не уведомлённых» в reconcile-джобе.
             b.HasIndex(x => x.NotifiedAt).HasFilter("\"NotifiedAt\" IS NULL");
+        });
+
+        builder.Entity<TelegramProxy>(b =>
+        {
+            b.ToTable("telegram_proxies");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Host).HasMaxLength(255).IsRequired();
+            b.Property(x => x.Protocol).HasMaxLength(16).IsRequired();
+            b.Property(x => x.Username).HasMaxLength(255);
+            b.Property(x => x.Password).HasMaxLength(255);
+            b.Property(x => x.Notes).HasMaxLength(500);
+            b.HasIndex(x => x.Enabled);
+            // Уникальность (host, port, username) — как у парсерных прокси (защита от дублей).
+            b.HasIndex(x => new { x.Host, x.Port, x.Username }).IsUnique();
         });
 
         builder.Entity<UserRequest>(b =>

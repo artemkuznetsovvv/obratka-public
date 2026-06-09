@@ -145,6 +145,12 @@ builder.Services.AddNotificationsModule(builder.Configuration);
 // Адресата уведомлений резолвит Web API (доступ к Identity-пользователю + MonitoringConfig).
 builder.Services.AddScoped<INotificationRecipientResolver, WebApiNotificationRecipientResolver>();
 
+// Пул прокси Telegram (webapi_db) + владелец/ротатор клиента. Manager — singleton (держит активный
+// клиент, в БД ходит через scope); репозиторий — scoped. Регистрируем всегда: при пустом пуле
+// manager собирает клиент по строке Telegram:Proxy / прямое соединение.
+builder.Services.AddScoped<ITelegramProxyRepository, TelegramProxyRepository>();
+builder.Services.AddSingleton<ITelegramClientManager, WebApiTelegramClientManager>();
+
 // Long-poll receiver Telegram (привязка /start) — только если канал сконфигурирован.
 var telegramConfigured = (builder.Configuration
     .GetSection(TelegramOptions.SectionName)

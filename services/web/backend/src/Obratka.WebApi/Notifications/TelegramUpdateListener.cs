@@ -14,12 +14,18 @@ namespace Obratka.WebApi.Notifications;
 // Long-poll receiver (ТЗ §1): принимает /start <token> для привязки аккаунта и /unlink для отвязки.
 // Дополнительно: /chatid (узнать chat_id — удобно для добавления группы в Telegram:AdminChatIds),
 // /wisdom и фраза «Обратка, мудрость» — тестовая команда (бот отвечает мыслью, что он жив).
-// Регистрируется только когда Telegram сконфигурирован (см. Program.cs) → ITelegramBotClient всегда есть.
+// Регистрируется только когда Telegram сконфигурирован (см. Program.cs).
 // Каждый апдейт обрабатывается в своём scope (UserManager/DbContext — scoped).
+//
+// Клиент берём у ITelegramClientManager (он же владеет пулом прокси). Вместо fire-and-forget
+// StartReceiving ведём СВОЙ цикл ReceiveAsync: на connectivity-ошибке long-poll прерываем петлю
+// (отменяем loopCts из error-handler'а), ротируем прокси и перезапускаемся на новом клиенте —
+// иначе библиотека вечно ретраила бы мёртвый прокси (баг «Connection refused»).
 internal sealed class TelegramUpdateListener(
-    ITelegramBotClient bot,
+    ITelegramClientManager manager,
     IServiceScopeFactory scopeFactory,
     IOptions<TelegramOptions> options,
+    IOptions<TelegramProxyOptions> proxyOptions,
     ILogger<TelegramUpdateListener> logger) : BackgroundService
 {
     // Тестовые «мудрости» — для проверки, что бот жив (в т.ч. в группе).
@@ -37,18 +43,84 @@ internal sealed class TelegramUpdateListener(
         "Мудрость начинается с удивления. (Сократ)",
     ];
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var receiverOptions = new ReceiverOptions
         {
             AllowedUpdates = [UpdateType.Message],
             DropPendingUpdates = true,
         };
-        // StartReceiving крутит цикл getUpdates в фоне до отмены stoppingToken (на остановке хоста).
-        bot.StartReceiving(HandleUpdateAsync, HandlePollingErrorAsync, receiverOptions, stoppingToken);
+        var noProxyDelay = TimeSpan.FromSeconds(Math.Max(5, proxyOptions.Value.NoProxyRetryDelaySeconds));
+
+        await manager.EnsureCurrentAsync(stoppingToken);
         logger.LogInformation("Telegram long-poll receiver запущен (бот @{Username}).", options.Value.BotUsername);
-        return Task.CompletedTask;
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            var client = manager.Current;
+            if (client is null)
+            {
+                logger.LogWarning("Telegram: нет пригодного прокси — повтор через {Delay}s", noProxyDelay.TotalSeconds);
+                try { await Task.Delay(noProxyDelay, stoppingToken); } catch (OperationCanceledException) { break; }
+                await manager.RotateAsync("retry-after-empty", stoppingToken);
+                continue;
+            }
+
+            using var loopCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+            string? rotateReason = null;
+
+            // У ReceiveAsync error-handler без HandleErrorSource (он только у StartReceiving) — нам source
+            // не нужен, классифицируем по типу исключения. На connectivity-ошибке отменяем loopCts
+            // (return-значением петлю не прервать) → ReceiveAsync завершится, ниже ротируем. API-ошибки
+            // (429/неверный токен) НЕ ротируем — смена прокси их не лечит. Явно типизируем делегат, чтобы
+            // не было неоднозначности перегрузок.
+            Func<ITelegramBotClient, Exception, CancellationToken, Task> errorHandler = (_, ex, _) =>
+            {
+                if (IsConnectivityError(ex))
+                {
+                    logger.LogWarning(ex, "Telegram long-poll connectivity error — ротация прокси");
+                    rotateReason = $"long-poll: {ex.GetType().Name}";
+                    // ReSharper disable once AccessToDisposedClosure — отмена до выхода из ReceiveAsync.
+                    loopCts.Cancel();
+                }
+                else
+                {
+                    logger.LogWarning(ex, "Telegram long-poll error");
+                }
+                return Task.CompletedTask;
+            };
+
+            try
+            {
+                await client.ReceiveAsync(HandleUpdateAsync, errorHandler, receiverOptions, loopCts.Token);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break; // остановка хоста — выходим штатно
+            }
+            catch (OperationCanceledException)
+            {
+                // loopCts отменён error-handler'ом на connectivity-ошибке → ротируем ниже.
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Telegram receive loop unexpected error — ротация прокси");
+                rotateReason ??= $"receive-loop: {ex.GetType().Name}";
+            }
+
+            if (stoppingToken.IsCancellationRequested) break;
+            await manager.RotateAsync(rotateReason ?? "long-poll-restart", stoppingToken);
+
+            // Троттлинг рестартов: если ротация снова даёт падающий клиент (классический случай —
+            // единственный fallback-прокси из конфига мёртв и пул пуст: cooldown к fallback неприменим,
+            // Current не становится null), без паузы это был бы горячий цикл. Короткая пауза ограничивает
+            // частоту перезапусков; на исправную ротацию между живыми прокси влияет незначительно.
+            try { await Task.Delay(RestartThrottle, stoppingToken); } catch (OperationCanceledException) { break; }
+        }
     }
+
+    // Минимальный интервал между перезапусками receive-loop после connectivity-сбоя (анти-hot-loop).
+    private static readonly TimeSpan RestartThrottle = TimeSpan.FromSeconds(5);
 
     private async Task HandleUpdateAsync(ITelegramBotClient client, Update update, CancellationToken ct)
     {
@@ -224,9 +296,20 @@ internal sealed class TelegramUpdateListener(
 
     private static string RandomWisdom() => Wisdoms[Random.Shared.Next(Wisdoms.Length)];
 
-    private Task HandlePollingErrorAsync(ITelegramBotClient client, Exception exception, CancellationToken ct)
+    // Connectivity-ошибка (прокси/сеть мертвы) → ротируем прокси. Классифицируем по ТИПУ по цепочке
+    // InnerException, НЕ по тексту (локализация). НЕ включаем Telegram.Bot RequestException, т.к. от
+    // него наследуется ApiRequestException (429/неверный токен) — её ротацией не вылечить. Кейс
+    // пользователя (RequestException → HttpRequestException → SocketException) ловится через HttpRequestException.
+    private static bool IsConnectivityError(Exception? ex)
     {
-        logger.LogWarning(exception, "Telegram long-poll error");
-        return Task.CompletedTask;
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is System.Net.Sockets.SocketException
+                or System.Net.Http.HttpRequestException
+                or System.Net.WebException
+                or System.IO.IOException)
+                return true;
+        }
+        return false;
     }
 }

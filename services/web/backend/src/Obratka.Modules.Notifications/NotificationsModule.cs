@@ -17,9 +17,12 @@ internal sealed class NotificationsModule(
     INotificationRecipientResolver recipients,
     IOptions<TelegramOptions> options,
     ILogger<NotificationsModule> logger,
-    ITelegramBotClient? bot = null) : INotificationsModule
+    ITelegramClientManager? manager = null) : INotificationsModule
 {
     private TelegramOptions Opts => options.Value;
+
+    // Активный клиент берём у менеджера (он же ротирует прокси). null → канал недоступен → лог-стаб.
+    private ITelegramBotClient? Bot => manager?.Current;
 
     public async Task SendMonitoringCycleResultAsync(
         Guid userId, Guid monitoringId, string status, int newReviewCount,
@@ -159,7 +162,7 @@ internal sealed class NotificationsModule(
         var text = string.Join("\n", lines);
 
         var admins = Opts.ResolvedAdminChatIds;
-        if (bot is null || admins.Count == 0)
+        if (Bot is null || admins.Count == 0)
         {
             logger.LogWarning(
                 "[notify:admin] (stub) stage={Stage} severity={Severity} event={EventId} reason={Reason} " +
@@ -191,10 +194,10 @@ internal sealed class NotificationsModule(
     // true → доставлять некому (бот выключен или нет ни одного чата). Логирует причину.
     private bool NoDelivery(IReadOnlyList<string> recipients, string type, string corr)
     {
-        if (bot is not null && recipients.Count > 0) return false;
+        if (Bot is not null && recipients.Count > 0) return false;
         logger.LogInformation(
             "[notify:user] нет получателей (type={Type}, corr={Corr}, recipients={Count}, botEnabled={BotEnabled}) — skip",
-            type, corr, recipients.Count, bot is not null);
+            type, corr, recipients.Count, Bot is not null);
         return true;
     }
 
@@ -202,14 +205,16 @@ internal sealed class NotificationsModule(
     private async Task SendRawAsync(
         string chatId, string text, InlineKeyboardMarkup? replyMarkup, string type, string corr, CancellationToken ct)
     {
-        if (bot is null)
+        // Снимок активного клиента: ротация прокси в фоне затронет только следующий вызов.
+        var client = Bot;
+        if (client is null)
         {
             logger.LogInformation("[telegram:send] type={Type} skipped (bot disabled) corr={Corr}", type, corr);
             return;
         }
         try
         {
-            await bot.SendMessage(
+            await client.SendMessage(
                 chatId: new ChatId(chatId),
                 text: text,
                 parseMode: ParseMode.Html,

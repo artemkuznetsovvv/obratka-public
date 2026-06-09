@@ -122,6 +122,41 @@ export const adminProxiesApi = {
       .then((r) => r.data),
 }
 
+// ----- Telegram bot proxies (webapi_db, та же форма что у Parser-прокси) -----
+// Хранятся в Web API (не проксируются в Parser). При сбое long-poll бот ротирует прокси из пула.
+export type TelegramProxy = ParserProxy
+export type TelegramProxyListResponse = ParserProxyListResponse
+export type CreateTelegramProxyRequest = CreateParserProxyRequest
+
+export const adminTelegramProxiesApi = {
+  list: (enabledOnly?: boolean) =>
+    http
+      .get<TelegramProxyListResponse>('/api/admin/telegram-proxies', {
+        params: enabledOnly !== undefined ? { enabledOnly } : undefined,
+      })
+      .then((r) => r.data),
+
+  create: (request: CreateTelegramProxyRequest) =>
+    http.post<TelegramProxy>('/api/admin/telegram-proxies', request).then((r) => r.data),
+
+  delete: (id: number) =>
+    http.delete<void>(`/api/admin/telegram-proxies/${id}`).then((r) => r.data),
+
+  disable: (id: number) =>
+    http.post<TelegramProxy>(`/api/admin/telegram-proxies/${id}/disable`).then((r) => r.data),
+
+  enable: (id: number) =>
+    http.post<TelegramProxy>(`/api/admin/telegram-proxies/${id}/enable`).then((r) => r.data),
+
+  resetHealth: (id: number) =>
+    http.post<TelegramProxy>(`/api/admin/telegram-proxies/${id}/reset-health`).then((r) => r.data),
+
+  setExpiresAt: (id: number, expiresAt: string | null) =>
+    http
+      .post<TelegramProxy>(`/api/admin/telegram-proxies/${id}/set-expires-at`, { expiresAt })
+      .then((r) => r.data),
+}
+
 // ----- Parser tasks -----
 export interface ParserTask {
   taskId: string
