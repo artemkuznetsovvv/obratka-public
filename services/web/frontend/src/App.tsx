@@ -4,6 +4,8 @@ import { useAuth } from '@/auth/AuthContext'
 import { AuthLayout } from '@/layouts/AuthLayout'
 import AuthPage from '@/pages/auth/AuthPage'
 import UsersPage from '@/pages/admin/UsersPage'
+import UserDetailPage from '@/pages/admin/UserDetailPage'
+import AdminCompanyDetailPage from '@/pages/admin/AdminCompanyDetailPage'
 import RequestsPage from '@/pages/admin/RequestsPage'
 import ProxiesPage from '@/pages/admin/ProxiesPage'
 import ParserTasksPage from '@/pages/admin/ParserTasksPage'
@@ -128,6 +130,14 @@ export default function App() {
         }
       />
       <Route
+        path="/admin/users/:userId"
+        element={
+          <ProtectedRoute requiredRole="Admin">
+            <UserDetailPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/admin/requests"
         element={
           <ProtectedRoute requiredRole="Admin">
@@ -172,6 +182,14 @@ export default function App() {
         element={
           <ProtectedRoute requiredRole="Admin">
             <CompaniesPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/companies/:companyId"
+        element={
+          <ProtectedRoute requiredRole="Admin">
+            <AdminCompanyDetailPage />
           </ProtectedRoute>
         }
       />

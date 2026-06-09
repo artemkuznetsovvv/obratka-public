@@ -306,6 +306,8 @@ app.UseSerilogRequestLogging(options =>
 app.UseAuthentication();
 // Инициатор в LogContext для in-request логов — ПОСЛЕ UseAuthentication (нужен заполненный User).
 app.UseMiddleware<InitiatorEnrichmentMiddleware>();
+// Обновление LastActivityAt (троттлинг через IMemoryCache) — тоже после UseAuthentication.
+app.UseMiddleware<LastActivityMiddleware>();
 app.UseAuthorization();
 app.MapControllers();
 

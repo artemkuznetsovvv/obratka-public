@@ -9,6 +9,8 @@ export interface AdminUserListItem {
   isBlocked: boolean
   roles: string[]
   createdAt: string
+  companiesCount: number
+  lastActivityAt: string | null
 }
 
 export interface AdminUserListResponse {
@@ -16,9 +18,43 @@ export interface AdminUserListResponse {
   items: AdminUserListItem[]
 }
 
+export interface AdminUserCompany {
+  id: string
+  name: string
+  createdAt: string
+  sources: string[]
+  branchCount: number
+  analysesCount: number | null
+  hasActiveMonitoring: boolean
+}
+
+export interface AdminUserDetails {
+  id: string
+  email: string
+  fullName: string
+  phoneNumber: string | null
+  createdAt: string
+  isBlocked: boolean
+  lastActivityAt: string | null
+  roles: string[]
+  companies: AdminUserCompany[]
+}
+
+export interface AdminUpdateUserBody {
+  email: string
+  fullName: string
+  phoneNumber: string | null
+}
+
 export const adminUsersApi = {
-  list: (params?: { limit?: number; offset?: number }) =>
+  list: (params?: { limit?: number; offset?: number; search?: string; status?: string }) =>
     http.get<AdminUserListResponse>('/api/admin/users', { params }).then((r) => r.data),
+
+  get: (id: string) =>
+    http.get<AdminUserDetails>(`/api/admin/users/${id}`).then((r) => r.data),
+
+  update: (id: string, body: AdminUpdateUserBody) =>
+    http.put<AdminUserDetails>(`/api/admin/users/${id}`, body).then((r) => r.data),
 
   block: (id: string) =>
     http.post<AdminUserListItem>(`/api/admin/users/${id}/block`).then((r) => r.data),
@@ -325,6 +361,32 @@ export interface AdminCompanyBranchDto {
   createdAt: string
 }
 
+export interface AdminCompanyLogicalBranch {
+  id: string
+  name: string
+  address: string | null
+  city: string
+}
+
+export interface AdminCompanyAnalysis {
+  id: string
+  status: string
+  reviewCount: number
+  createdAt: string
+  completedAt: string | null
+}
+
+export interface AdminCompanyMonitoring {
+  id: string
+  status: string
+  sources: string[]
+  windowDays: number
+  frequency: string
+  lastCollectedAt: string | null
+  lastRunStatus: string | null
+  notificationsEnabled: boolean
+}
+
 export interface AdminCompanyDetails {
   id: string
   name: string
@@ -339,6 +401,9 @@ export interface AdminCompanyDetails {
   updatedAt: string
   notificationChatIds: string[]
   branches: AdminCompanyBranchDto[]
+  logicalBranches: AdminCompanyLogicalBranch[]
+  recentAnalyses: AdminCompanyAnalysis[]
+  monitoring: AdminCompanyMonitoring | null
 }
 
 export const adminCompaniesApi = {

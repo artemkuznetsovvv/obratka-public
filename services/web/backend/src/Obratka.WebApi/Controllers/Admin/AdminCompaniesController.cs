@@ -4,13 +4,18 @@ using Microsoft.EntityFrameworkCore;
 using Obratka.WebApi.Auth;
 using Obratka.WebApi.Contracts.Admin;
 using Obratka.WebApi.Data;
+using Obratka.WebApi.Integration.ProcessingGateway;
+using Obratka.WebApi.Monitoring;
 
 namespace Obratka.WebApi.Controllers.Admin;
 
 [ApiController]
 [Authorize(Roles = Roles.Admin)]
 [Route("api/admin/companies")]
-public sealed class AdminCompaniesController(WebApiDbContext db) : ControllerBase
+public sealed class AdminCompaniesController(
+    WebApiDbContext db,
+    IProcessingGatewayClient gateway,
+    ILogger<AdminCompaniesController> logger) : ControllerBase
 {
     [HttpGet]
     [ProducesResponseType(typeof(AdminCompanyListResponse), StatusCodes.Status200OK)]
@@ -81,6 +86,37 @@ public sealed class AdminCompaniesController(WebApiDbContext db) : ControllerBas
                 b.Rating, b.ReviewCount, b.IsSelected, b.CreatedAt))
             .ToListAsync(ct);
 
+        // Логические (физические) филиалы — их Id = branch_id в анализах/reviews (ТЗ §4).
+        var logicalBranches = await db.LogicalBranches.AsNoTracking()
+            .Where(lb => lb.CompanyId == id)
+            .OrderBy(lb => lb.City).ThenBy(lb => lb.Name)
+            .Select(lb => new AdminCompanyLogicalBranchDto(lb.Id, lb.Name, lb.Address, lb.City))
+            .ToListAsync(ct);
+
+        // Live-мониторинг компании (последний конфиг по компании) — read-only проекция.
+        var mon = await db.MonitoringConfigs.AsNoTracking()
+            .Where(m => m.CompanyId == id)
+            .OrderByDescending(m => m.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+        var monitoring = mon is null ? null : new AdminCompanyMonitoringDto(
+            mon.Id, mon.Status.Wire(), mon.Sources, mon.WindowDays, mon.Frequency.ToString(),
+            mon.LastCollectedAt, mon.LastRunStatus?.Wire(), mon.NotificationsEnabled);
+
+        // Последние анализы — из PG; недоступность деградирует в пустой список (карточка read-only).
+        IReadOnlyList<AdminCompanyAnalysisDto> recentAnalyses;
+        try
+        {
+            var resp = await gateway.ListAnalysesAsync(null, id, 10, 0, ct);
+            recentAnalyses = resp.Items
+                .Select(j => new AdminCompanyAnalysisDto(j.Id, j.Status, j.ReviewCount, j.CreatedAt, j.CompletedAt))
+                .ToList();
+        }
+        catch (Exception ex) when (ex is ProcessingGatewayException or HttpRequestException)
+        {
+            logger.LogWarning(ex, "PG recent analyses failed for company {CompanyId}", id);
+            recentAnalyses = [];
+        }
+
         return Ok(new AdminCompanyDetails(
             data.c.Id,
             data.c.Name,
@@ -94,7 +130,10 @@ public sealed class AdminCompaniesController(WebApiDbContext db) : ControllerBas
             data.c.CreatedAt,
             data.c.UpdatedAt,
             data.c.NotificationChatIds,
-            branches));
+            branches,
+            logicalBranches,
+            recentAnalyses,
+            monitoring));
     }
 
     // Доп. чаты для дублирования результатов анализов компании (live-мониторинг + разовые).
