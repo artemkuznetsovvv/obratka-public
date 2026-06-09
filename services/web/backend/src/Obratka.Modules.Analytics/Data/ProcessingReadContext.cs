@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Obratka.Modules.Analytics.Data.Entities;
 
 namespace Obratka.Modules.Analytics.Data;
@@ -79,7 +80,8 @@ public sealed class ProcessingReadContext(DbContextOptions<ProcessingReadContext
                     v => JsonSerializer.Serialize(v, JsonOptions),
                     v => string.IsNullOrEmpty(v)
                         ? new List<string>()
-                        : JsonSerializer.Deserialize<List<string>>(v, JsonOptions) ?? new List<string>());
+                        : JsonSerializer.Deserialize<List<string>>(v, JsonOptions) ?? new List<string>(),
+                    EvidenceComparer);
             e.Property(r => r.SortOrder).HasColumnName("sort_order");
         });
     }
@@ -88,6 +90,15 @@ public sealed class ProcessingReadContext(DbContextOptions<ProcessingReadContext
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
+
+    // Компаратор для evidence (List<string> через value-converter). EF требует его для
+    // корректного сравнения элементов коллекции (иначе CollectionWithoutComparer, EventId 10620).
+    // Контекст read-only (change-tracking фактически не используется), но делаем корректный
+    // deep-компаратор: поэлементное равенство + снапшот через копию.
+    private static readonly ValueComparer<List<string>> EvidenceComparer = new(
+        (a, b) => (a == null && b == null) || (a != null && b != null && a.SequenceEqual(b)),
+        v => v == null ? 0 : v.Aggregate(0, (h, s) => HashCode.Combine(h, s)),
+        v => v == null ? new List<string>() : v.ToList());
 
     public override int SaveChanges()
         => throw new InvalidOperationException(
