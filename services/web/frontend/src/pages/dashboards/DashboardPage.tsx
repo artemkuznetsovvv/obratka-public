@@ -71,10 +71,16 @@ export default function DashboardPage() {
   return (
     <AppLayout
       breadcrumbs={
-        monitoring
+        // Корень крошек определяем по синхронному ?monitoring (а не по async-объекту
+        // monitoring) — тогда он не «мигает» История→Live при загрузке и всегда совпадает
+        // с подсветкой пункта меню (Sidebar использует тот же сигнал, см. activeNavOverride).
+        monitoringId
           ? [
               { label: 'Live-мониторинг', to: '/monitoring' },
-              { label: monitoring.companyName, to: `/monitoring/${monitoring.id}` },
+              {
+                label: monitoring?.companyName ?? dashQuery.data?.companyName ?? '…',
+                to: `/monitoring/${monitoringId}`,
+              },
               { label: 'Дашборд' },
             ]
           : [
@@ -88,12 +94,12 @@ export default function DashboardPage() {
         <div className="mb-6">
           <Button
             variant="outline"
-            onClick={() => navigate(monitoring ? '/monitoring' : `/history/${jobId}`)}
+            onClick={() => navigate(monitoringId ? '/monitoring' : `/history/${jobId}`)}
             className="gap-2"
             size="sm"
           >
             <ArrowLeft size={14} />
-            {monitoring ? 'К мониторингам' : 'К деталям анализа'}
+            {monitoringId ? 'К мониторингам' : 'К деталям анализа'}
           </Button>
         </div>
 

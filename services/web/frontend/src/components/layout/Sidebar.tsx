@@ -1,4 +1,4 @@
-import { NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Activity, BarChart3, Bell, Building2, Clock, Globe, Inbox, ListTodo, LogOut, Plus, Shield, User, Users, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -28,6 +28,22 @@ const adminNav: NavItem[] = [
   { to: '/admin/parser-tasks', label: 'Парсер-задачи', icon: ListTodo },
   { to: '/admin/analyses', label: 'Анализы', icon: BarChart3 },
 ]
+
+// Дашборд («/history/:jobId/dashboard») — общий экран, открываемый и из «Live-мониторинга»
+// (со ?monitoring=<id>), и из «Истории анализов» (без него). Раздел открытия — а значит и
+// подсвеченный пункт меню, и корень хлебных крошек — задаётся наличием ?monitoring, ровно как
+// DashboardPage строит крошки. Зеркалим тот же синхронный сигнал здесь, чтобы подсветка всегда
+// совпадала с крошками и переживала reload / прямую ссылку, а не падала в «Историю анализов»
+// по умолчанию из-за pathname.startsWith('/history'). Вне дашборда — null (обычный startsWith).
+const DASHBOARD_PATH_RE = /^\/history\/[^/]+\/dashboard\/?$/
+
+export function activeNavOverride(pathname: string, search: string): string | null {
+  if (!DASHBOARD_PATH_RE.test(pathname)) return null
+  // .get()+truthy (а не .has()) — ровно как DashboardPage: раздел = «мониторинг» только при
+  // непустом ?monitoring (пустой ?monitoring= → «История»), чтобы сигнал совпадал 1-в-1.
+  const monitoringId = new URLSearchParams(search).get('monitoring')
+  return monitoringId ? '/monitoring' : '/history'
+}
 
 export function Sidebar() {
   const { user, logout } = useAuth()
@@ -136,10 +152,16 @@ function SidebarLink({ to, label, icon: Icon, disabled, badge }: NavItem) {
       </div>
     )
   }
-  const isActive = location.pathname.startsWith(to)
+  // Link (а не NavLink): активность мы считаем сами (override + startsWith), а NavLink ещё и
+  // навешивал бы aria-current по префиксу пути — на дашборде из мониторинга это пометило бы
+  // «Историю» (префикс /history) вопреки визуальной подсветке «Live». aria-current ведём от
+  // нашего isActive, чтобы a11y совпадал с подсветкой и с крошками.
+  const override = activeNavOverride(location.pathname, location.search)
+  const isActive = override !== null ? override === to : location.pathname.startsWith(to)
   return (
-    <NavLink
+    <Link
       to={to}
+      aria-current={isActive ? 'page' : undefined}
       className={cn(
         'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors',
         isActive
@@ -155,6 +177,6 @@ function SidebarLink({ to, label, icon: Icon, disabled, badge }: NavItem) {
           {badge}
         </span>
       )}
-    </NavLink>
+    </Link>
   )
 }
