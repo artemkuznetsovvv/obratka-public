@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Obratka.Modules.Analytics.Data;
@@ -35,7 +36,14 @@ public static class DependencyInjection
         if (!string.IsNullOrWhiteSpace(cs))
         {
             services.AddDbContext<ProcessingReadContext>(options =>
-                options.UseNpgsql(cs));
+                options
+                    .UseNpgsql(cs)
+                    // Метрики аналитики используют идиом GroupBy(_ => 1).Select(агрегаты).First():
+                    // константный ключ → ровно одна группа, результат детерминирован, OrderBy не нужен.
+                    // EF-предупреждение FirstWithoutOrderByAndFilterWarning для этого идиома ложно-
+                    // положительное → глушим его ТОЛЬКО на read-only контексте аналитики (в основном
+                    // webapi_db оно остаётся активным и ловит реальные недетерминированные First).
+                    .ConfigureWarnings(w => w.Ignore(CoreEventId.FirstWithoutOrderByAndFilterWarning)));
             services.AddScoped<IReviewCountMetricService, ReviewCountMetricService>();
             services.AddScoped<IAverageRatingMetricService, AverageRatingMetricService>();
             services.AddScoped<ISentimentDistributionMetricService, SentimentDistributionMetricService>();
