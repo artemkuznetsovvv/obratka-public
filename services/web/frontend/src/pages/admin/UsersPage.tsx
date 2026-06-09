@@ -76,6 +76,7 @@ export default function UsersPage() {
                 <TableHead>ID</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Имя</TableHead>
+                <TableHead>Роль</TableHead>
                 <TableHead>Статус</TableHead>
                 <TableHead>Компаний</TableHead>
                 <TableHead>Последняя активность</TableHead>
@@ -85,7 +86,7 @@ export default function UsersPage() {
             <TableBody>
               {data.items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-text-secondary py-12">
+                  <TableCell colSpan={8} className="text-center text-text-secondary py-12">
                     Пользователи не найдены
                   </TableCell>
                 </TableRow>
@@ -99,6 +100,17 @@ export default function UsersPage() {
                   <TableCell className="font-mono text-text-tertiary">{u.id.slice(0, 8)}…</TableCell>
                   <TableCell className="font-medium">{u.email}</TableCell>
                   <TableCell>{u.fullName || '—'}</TableCell>
+                  <TableCell>
+                    {u.roles.length ? (
+                      <div className="flex flex-wrap gap-1">
+                        {u.roles.map((r) => (
+                          <Badge key={r} variant={r === 'Admin' ? 'secondary' : 'muted'}>{r}</Badge>
+                        ))}
+                      </div>
+                    ) : (
+                      '—'
+                    )}
+                  </TableCell>
                   <TableCell>
                     {u.isBlocked ? (
                       <Badge variant="destructive">Заблокирован</Badge>
