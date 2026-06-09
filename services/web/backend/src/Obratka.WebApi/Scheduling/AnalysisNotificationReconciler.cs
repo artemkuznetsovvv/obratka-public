@@ -5,6 +5,7 @@ using Obratka.WebApi.Companies;
 using Obratka.WebApi.Data;
 using Obratka.WebApi.Integration.ProcessingGateway;
 using Obratka.WebApi.Integration.ProcessingGateway.Contracts;
+using Serilog.Context;
 
 namespace Obratka.WebApi.Scheduling;
 
@@ -35,6 +36,11 @@ internal sealed class AnalysisNotificationReconciler(
 
         foreach (var watch in pending)
         {
+            // Системный инициатор + сквозной трейс на отслеживаемый job (диспозится на итерации).
+            using var _ = LogContext.PushProperty("Initiator", "system:reconciler");
+            using var __ = LogContext.PushProperty("AnalysisJobId", watch.JobId);
+            using var ___ = LogContext.PushProperty("CompanyId", watch.CompanyId);
+
             AnalysisJobDto? job;
             try
             {

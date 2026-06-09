@@ -17,7 +17,8 @@ namespace Obratka.WebApi.Controllers.Admin;
 [Route("api/admin/analyses")]
 public sealed class AdminAnalysesController(
     IProcessingGatewayClient gateway,
-    WebApiDbContext db) : ControllerBase
+    WebApiDbContext db,
+    ILogger<AdminAnalysesController> logger) : ControllerBase
 {
     [HttpGet]
     [ProducesResponseType(typeof(AnalysisJobListResponse), StatusCodes.Status200OK)]
@@ -51,6 +52,8 @@ public sealed class AdminAnalysesController(
             .SingleOrDefaultAsync(c => c.Id == request.CompanyId, ct);
         if (company is null) return NotFound(new { error = "Компания не найдена" });
 
+        HttpContext.Items["CompanyId"] = request.CompanyId;
+
         var branches = await db.CompanyBranches.AsNoTracking()
             .Where(b => b.CompanyId == request.CompanyId
                         && b.IsSelected
@@ -73,6 +76,13 @@ public sealed class AdminAnalysesController(
             CompanyId = request.CompanyId,
         });
         await db.SaveChangesAsync(ct);
+
+        // Web-API-сторона pivot (админский запуск): связь CorrelationId запроса с новым AnalysisJobId.
+        // Initiator (admin:<id>) уже в LogContext из InitiatorEnrichmentMiddleware — не дублируем.
+        HttpContext.Items["AnalysisJobId"] = response.AnalysisJobId;
+        logger.LogInformation(
+            "Analysis started for company {CompanyId} -> job {AnalysisJobId}",
+            request.CompanyId, response.AnalysisJobId);
 
         return Accepted($"/api/admin/analyses/{response.AnalysisJobId}", response);
     }

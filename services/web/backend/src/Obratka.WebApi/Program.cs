@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Text;
 using Hangfire;
 using Hangfire.PostgreSql;
@@ -11,10 +12,12 @@ using Obratka.Modules.Reports;
 using Obratka.WebApi.Auth;
 using Obratka.WebApi.Companies;
 using Obratka.WebApi.Data;
+using Obratka.WebApi.Integration.Logging;
 using Obratka.WebApi.Integration.ParserService;
 using Obratka.WebApi.Integration.ProcessingGateway;
 using Obratka.WebApi.Notifications;
 using Obratka.WebApi.Scheduling;
+using Obratka.WebApi.Telemetry;
 using Serilog;
 using Serilog.Events;
 
@@ -132,6 +135,9 @@ builder.Services.AddSingleton<Obratka.WebApi.Companies.Grouping.IBranchGroupingS
 
 builder.Services.AddMemoryCache();
 
+// Нужен исходящему OutgoingHttpLoggingMiddleware/handler для проброса X-Correlation-ID из HttpContext.
+builder.Services.AddHttpContextAccessor();
+
 builder.Services.AddAnalyticsModule(builder.Configuration);
 builder.Services.AddReportsModule();
 builder.Services.AddNotificationsModule(builder.Configuration);
@@ -172,7 +178,12 @@ builder.Services.AddHttpClient<IParserServiceClient, ParserServiceClient>((sp, h
         throw new InvalidOperationException("ParserService:BaseUrl must be configured");
     http.BaseAddress = new Uri(opts.BaseUrl.TrimEnd('/') + "/");
     http.Timeout = TimeSpan.FromSeconds(opts.TimeoutSeconds);
-}).AddHttpMessageHandler<ParserApiKeyHandler>();
+})
+    .AddHttpMessageHandler(sp => new OutgoingHttpLoggingHandler(
+        "ParserService",
+        sp.GetRequiredService<IHttpContextAccessor>(),
+        sp.GetRequiredService<ILogger<OutgoingHttpLoggingHandler>>()))
+    .AddHttpMessageHandler<ParserApiKeyHandler>();
 
 // ---- Processing-Gateway HTTP client ----
 builder.Services.AddTransient<ProcessingGatewayApiKeyHandler>();
@@ -183,7 +194,12 @@ builder.Services.AddHttpClient<IProcessingGatewayClient, ProcessingGatewayClient
         throw new InvalidOperationException("ProcessingGateway:BaseUrl must be configured");
     http.BaseAddress = new Uri(opts.BaseUrl.TrimEnd('/') + "/");
     http.Timeout = TimeSpan.FromSeconds(opts.TimeoutSeconds);
-}).AddHttpMessageHandler<ProcessingGatewayApiKeyHandler>();
+})
+    .AddHttpMessageHandler(sp => new OutgoingHttpLoggingHandler(
+        "ProcessingGateway",
+        sp.GetRequiredService<IHttpContextAccessor>(),
+        sp.GetRequiredService<ILogger<OutgoingHttpLoggingHandler>>()))
+    .AddHttpMessageHandler<ProcessingGatewayApiKeyHandler>();
 
 // ---- CORS (dev frontend) ----
 var frontendOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
@@ -246,6 +262,10 @@ if (app.Environment.IsDevelopment())
     app.UseCors(FrontendCorsPolicy);
 }
 
+// Correlation — ДО request-logging: строка request-summary пишется уже после возврата из
+// downstream, поэтому CorrelationId должен быть в LogContext выше по стеку (иначе не попадёт в неё).
+app.UseMiddleware<CorrelationIdMiddleware>();
+
 app.UseSerilogRequestLogging(options =>
 {
     // Уровень per-request. 401/404 — ожидаемый штатный шум (истёкший access-токен перед
@@ -262,8 +282,24 @@ app.UseSerilogRequestLogging(options =>
         if (elapsed > 1000) return LogEventLevel.Warning;
         return LogEventLevel.Debug;
     };
+    // Поля ТЗ на строке request-summary. Вызывается на завершении запроса — User уже заполнен
+    // (UseAuthentication ниже отработал), поэтому инициатор/userId здесь доступны. CompanyId
+    // кладут контроллеры в HttpContext.Items, когда он известен.
+    options.EnrichDiagnosticContext = (diag, httpContext) =>
+    {
+        diag.Set("Direction", "incoming");
+        diag.Set("Initiator", InitiatorContext.Resolve(httpContext.User));
+        if (InitiatorContext.UserId(httpContext.User) is { } userId)
+            diag.Set("UserId", userId);
+        if (httpContext.Items.TryGetValue("CompanyId", out var companyId) && companyId is not null)
+            diag.Set("CompanyId", companyId);
+        if (httpContext.Items.TryGetValue("AnalysisJobId", out var jobId) && jobId is not null)
+            diag.Set("AnalysisJobId", jobId);
+    };
 });
 app.UseAuthentication();
+// Инициатор в LogContext для in-request логов — ПОСЛЕ UseAuthentication (нужен заполненный User).
+app.UseMiddleware<InitiatorEnrichmentMiddleware>();
 app.UseAuthorization();
 app.MapControllers();
 

@@ -40,6 +40,9 @@ public sealed class AnalysesController(
         var ownerId = GetUserIdOrNull();
         if (ownerId is null) return Unauthorized();
 
+        // Для request-summary (EnrichDiagnosticContext) и сквозного трейса.
+        HttpContext.Items["CompanyId"] = request.CompanyId;
+
         var company = await db.Companies.AsNoTracking()
             .SingleOrDefaultAsync(c => c.Id == request.CompanyId && c.OwnerUserId == ownerId, ct);
         if (company is null) return NotFound(new { error = "Компания не найдена" });
@@ -120,6 +123,14 @@ public sealed class AnalysesController(
             CompanyId = request.CompanyId,
         });
         await db.SaveChangesAsync(ct);
+
+        // Web-API-сторона pivot: связывает CorrelationId этого запроса с новым AnalysisJobId,
+        // который дальше станет сквозным трейсом анализа через PG/Parser. Initiator (user:<id>)
+        // уже в LogContext из InitiatorEnrichmentMiddleware — не дублируем в аргументах.
+        HttpContext.Items["AnalysisJobId"] = pgResponse.AnalysisJobId;
+        logger.LogInformation(
+            "Analysis started for company {CompanyId} -> job {AnalysisJobId}",
+            request.CompanyId, pgResponse.AnalysisJobId);
 
         var location = $"/api/analyses/{pgResponse.AnalysisJobId}";
         return Accepted(location, new StartAnalysisResponse(pgResponse.AnalysisJobId));

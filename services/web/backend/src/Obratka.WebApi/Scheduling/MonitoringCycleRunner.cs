@@ -8,6 +8,7 @@ using Obratka.WebApi.Data;
 using Obratka.WebApi.Integration.ProcessingGateway;
 using Obratka.WebApi.Integration.ProcessingGateway.Contracts;
 using Obratka.WebApi.Monitoring;
+using Serilog.Context;
 
 namespace Obratka.WebApi.Scheduling;
 
@@ -40,6 +41,12 @@ internal sealed class MonitoringCycleRunner(
             logger.LogWarning("Monitoring {Id} not found — skip trigger", monitoringId);
             return;
         }
+
+        // Системный инициатор + сквозной трейс цикла: seed-job и есть анализ.
+        using var _ = LogContext.PushProperty("Initiator", "system:monitoring");
+        using var __ = LogContext.PushProperty("AnalysisJobId", config.SeedJobId);
+        using var ___ = LogContext.PushProperty("CompanyId", config.CompanyId);
+
         if (config.Status != MonitoringStatus.Active)
         {
             logger.LogInformation("Monitoring {Id} status {Status} — skip trigger", monitoringId, config.Status);
@@ -153,6 +160,11 @@ internal sealed class MonitoringCycleRunner(
                 await db.SaveChangesAsync(Ct);
                 continue;
             }
+
+            // Системный инициатор + сквозной трейс на seed-job (диспозится на каждой итерации).
+            using var _ = LogContext.PushProperty("Initiator", "system:monitoring");
+            using var __ = LogContext.PushProperty("AnalysisJobId", config.SeedJobId);
+            using var ___ = LogContext.PushProperty("CompanyId", config.CompanyId);
 
             AnalysisJobDto? job;
             try
