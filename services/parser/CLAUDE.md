@@ -73,6 +73,28 @@ Slug-маппинг SourceType: `"yandex"` <-> `SourceType.YandexMaps` (см. `C
 
 ---
 
+## Логирование и Correlation ID (ADR-008)
+
+Единая модель трейсинга платформы (см. корневой `../logging-trace-plan.md`): **первичный
+сквозной трейс на анализ = `AnalysisJobId`** (он же `CollectionTask.JobId`); фильтр в Seq по нему
+показывает весь анализ через Web API + PG + Parser. Имена свойств `LogContext` едины между
+сервисами.
+
+- Serilog → Seq (`Seq:ServerUrl` + опц. `Seq:ApiKey`). Enricher: `Service = "parser-service"`,
+  `MachineName` (через `WithProperty(Environment.MachineName)` — без пакета), `Environment`.
+  Console-шаблон содержит `[{CorrelationId}]`.
+- `CorrelationIdMiddleware` (`Infrastructure/Telemetry/`) ловит `X-Correlation-ID`, который PG
+  шлёт на `POST /api/collection-tasks` и `GET .../{taskId}` (иначе генерит Guid "N"), кладёт в
+  ответ + `LogContext`. `UseSerilogRequestLogging` ставит `Direction=incoming` + уровни по статусу.
+- **Фоновый сбор — особый случай.** `CollectionTaskBackgroundService` гоняет
+  `CollectionTaskOrchestrator.ExecuteCollectionAsync` ВНЕ HTTP-запроса (через in-memory
+  `TaskQueue`), `LogContext` (AsyncLocal) границу канала не переходит, и `X-Correlation-ID`
+  исходного POST туда не доходит. Поэтому в начале `ExecuteCollectionAsync` трейс **восстанавливается
+  из персистентных полей `CollectionTask`**: `AnalysisJobId`(=`JobId`), `CompanyId`, `Source`,
+  `TaskId`, `Initiator="system:parser-collection"`. Все строки плагинов внутри наследуют их без правок.
+
+---
+
 # Задача: YandexMapsPlugin
 
 Спецификации:

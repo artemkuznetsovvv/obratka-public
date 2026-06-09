@@ -4,6 +4,7 @@ using ParserService.Api.Contracts;
 using ParserService.Core.Models;
 using ParserService.Infrastructure.RateLimiting;
 using ParserService.Infrastructure.Storage;
+using Serilog.Context;
 
 namespace ParserService.Core;
 
@@ -68,6 +69,11 @@ public class CollectionTaskOrchestrator
     public async Task<Guid> StartCollectionAsync(
         CreateCollectionTaskRequest request, CancellationToken ct)
     {
+        // Трейс для in-request логов создания задачи (request-summary обогащается из HttpContext.Items
+        // в CollectionTasksController — LogContext-scope сюда не дотягивается до строки summary).
+        using var _job = LogContext.PushProperty("AnalysisJobId", request.JobId);
+        using var _company = LogContext.PushProperty("CompanyId", request.CompanyId);
+
         var source = SourceTypeExtensions.FromSlug(request.Source);
 
         var task = new CollectionTask
@@ -86,8 +92,9 @@ public class CollectionTaskOrchestrator
         await _repository.CreateAsync(task, ct);
         await _taskQueue.EnqueueAsync(task.Id, ct);
 
-        _logger.LogInformation("Collection task {TaskId} created for source {Source}",
-            task.Id, source);
+        _logger.LogInformation(
+            "Collection task {TaskId} created for source {Source} (job {AnalysisJobId})",
+            task.Id, source, request.JobId);
 
         return task.Id;
     }
@@ -107,6 +114,17 @@ public class CollectionTaskOrchestrator
             _logger.LogWarning("Task {TaskId} not found for execution", taskId);
             return;
         }
+
+        // Восстановление сквозного трейса в фоновом воркере: LogContext (AsyncLocal) НЕ переходит
+        // границу in-memory TaskQueue, поэтому берём поля из персистентной CollectionTask. Так ВСЕ
+        // строки плагинов (TwoGis/Yandex/Google/BrowserScroll) внутри метода несут AnalysisJobId(=JobId)/
+        // CompanyId/Source/TaskId/инициатора без правок самих плагинов. X-Correlation-ID исходного
+        // POST сюда не доходит (канал несёт лишь taskId) — устойчивый трейс фона = AnalysisJobId.
+        using var _job = LogContext.PushProperty("AnalysisJobId", task.JobId);
+        using var _company = LogContext.PushProperty("CompanyId", task.CompanyId);
+        using var _src = LogContext.PushProperty("Source", task.Source.ToSlug());
+        using var _task = LogContext.PushProperty("TaskId", task.Id);
+        using var _initiator = LogContext.PushProperty("Initiator", "system:parser-collection");
 
         task.Status = CollectionTaskStatus.Running;
         task.Progress = 0;

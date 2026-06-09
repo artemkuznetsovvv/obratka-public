@@ -10,6 +10,7 @@ using ParserService.Infrastructure.Proxy;
 using ParserService.Infrastructure.RateLimiting;
 using ParserService.Infrastructure.Stealth;
 using ParserService.Infrastructure.Storage;
+using ParserService.Infrastructure.Telemetry;
 using ParserService.Sources.GoogleMaps;
 using ParserService.Sources.TwoGis;
 using ParserService.Sources.YandexMaps;
@@ -24,8 +25,12 @@ builder.Host.UseSerilog((ctx, cfg) =>
     cfg.ReadFrom.Configuration(ctx.Configuration)
         .Enrich.FromLogContext()
         .Enrich.WithProperty("Service", "parser-service")
+        // MachineName через WithProperty (а не WithMachineName) — без пакета Serilog.Enrichers.Environment;
+        // значение константно на процесс, эффект тот же. ADR-008 §template.
+        .Enrich.WithProperty("MachineName", Environment.MachineName)
         .Enrich.WithProperty("Environment", ctx.HostingEnvironment.EnvironmentName)
-        .WriteTo.Console();
+        .WriteTo.Console(outputTemplate:
+            "[{Timestamp:HH:mm:ss} {Level:u3}] [{CorrelationId}] {Message:lj}{NewLine}{Exception}");
 
     var seqUrl = ctx.Configuration["Seq:ServerUrl"];
     if (!string.IsNullOrWhiteSpace(seqUrl))
@@ -125,6 +130,29 @@ if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
+
+// Correlation — до request-logging (строка request-summary пишется уже после возврата из downstream).
+app.UseMiddleware<CorrelationIdMiddleware>();
+app.UseSerilogRequestLogging(options =>
+{
+    options.GetLevel = (httpContext, elapsed, ex) =>
+    {
+        if (ex is not null || httpContext.Response.StatusCode >= 500) return Serilog.Events.LogEventLevel.Error;
+        if (httpContext.Response.StatusCode >= 400) return Serilog.Events.LogEventLevel.Warning;
+        if (elapsed > 1000) return Serilog.Events.LogEventLevel.Warning;
+        return Serilog.Events.LogEventLevel.Debug;
+    };
+    options.EnrichDiagnosticContext = (diag, httpContext) =>
+    {
+        diag.Set("Direction", "incoming");
+        // AnalysisJobId/CompanyId на строку request-summary POST /api/collection-tasks
+        // (контроллер кладёт их в Items). Инициатора у Parser нет — это internal-сервис.
+        if (httpContext.Items.TryGetValue("AnalysisJobId", out var jobId) && jobId is not null)
+            diag.Set("AnalysisJobId", jobId);
+        if (httpContext.Items.TryGetValue("CompanyId", out var companyId) && companyId is not null)
+            diag.Set("CompanyId", companyId);
+    };
+});
 
 app.MapControllers();
 

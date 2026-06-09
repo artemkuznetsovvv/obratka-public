@@ -63,6 +63,10 @@ public class CollectionTasksController : ControllerBase
         if (request.Branches is not { Count: > 0 })
             return BadRequest(new { error = "At least one branch is required" });
 
+        // Для строки request-summary (Parser EnrichDiagnosticContext читает из Items).
+        HttpContext.Items["AnalysisJobId"] = request.JobId;
+        HttpContext.Items["CompanyId"] = request.CompanyId;
+
         var taskId = await _orchestrator.StartCollectionAsync(request, ct);
         return AcceptedAtAction(nameof(GetStatus), new { taskId }, new CreateCollectionTaskResponse(taskId));
     }
