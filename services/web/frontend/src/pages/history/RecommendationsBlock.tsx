@@ -136,7 +136,7 @@ function RecommendationItem({ rec }: { rec: RecommendationDto }) {
             aria-expanded={evidenceOpen}
           >
             <MessageSquareQuote size={11} />
-            Цитаты из отзывов · {rec.evidence.length}
+            Примеры цитат из отзывов · {rec.evidence.length}
             <ChevronDown
               size={12}
               className={cn('transition-transform', evidenceOpen && 'rotate-180')}
