@@ -72,7 +72,11 @@ def make_qa_router(*, store: JobStateStore, output_dir: Path) -> APIRouter:
         job_dir = output_dir / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
 
-        with logger.contextualize(analysis_job_id=job_id, qa_engine=engine):
+        # PascalCase — единые имена свойств с .NET/worker (см. worker.py).
+        # В QA сквозного CorrelationId нет, поэтому используем сам job_id.
+        with logger.contextualize(
+            AnalysisJobId=job_id, CorrelationId=job_id, qa_engine=engine
+        ):
             logger.info("QA analyze request received")
             store.start(job_id, started_at=_now_iso())
             store.update(job_id, stage="inferring", progress=0.1)

@@ -134,7 +134,23 @@ class Worker:
             logger.error(f"Inbound message missing analysis_job_id, dropped: {envelope!r}")
             return
 
-        with logger.contextualize(analysis_job_id=str(job_id)):
+        # CorrelationId сквозной трассировки. MassTransit кладёт его на верхний
+        # уровень конверта; если нет — берём conversationId, поля payload, а в
+        # крайнем случае сам job_id, чтобы свойство всегда было заполнено.
+        correlation_id = (
+            envelope.get("correlationId")
+            or envelope.get("conversationId")
+            or payload.get("correlation_id")
+            or payload.get("correlationId")
+            or str(job_id)
+        )
+
+        # PascalCase-имена (AnalysisJobId / CorrelationId) — чтобы в Seq свойства
+        # совпадали с .NET-сервисами (Serilog) и логи коррелировались сквозь сервисы.
+        with logger.contextualize(
+            AnalysisJobId=str(job_id),
+            CorrelationId=str(correlation_id),
+        ):
             logger.info("Inbound LLM request received")
             self._store.start(str(job_id), started_at=_now_iso())
 
