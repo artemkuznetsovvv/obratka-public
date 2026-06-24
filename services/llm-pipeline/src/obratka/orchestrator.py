@@ -69,7 +69,7 @@ async def run_pipeline(
     llm: LLMClient | None = None,
 ) -> PipelineResult:
     s = settings or get_settings()
-    setup_logging(level=s.log_level, logs_dir=s.logs_dir)
+    setup_logging(level=s.log_level, logs_dir=s.logs_dir, seq=s.seq, environment=s.app_env)
     setup_phoenix(s)
     components = PipelineComponents.build(s, dry_run=dry_run, llm=llm)
 

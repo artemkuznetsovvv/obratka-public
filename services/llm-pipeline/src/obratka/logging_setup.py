@@ -7,8 +7,12 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    from obratka.config import SeqConfig
 
 _DEFAULT_EXTRAS = {
     "step": "-",
@@ -30,8 +34,17 @@ def _redact_secrets(record) -> bool:
     return True
 
 
-def setup_logging(level: str = "INFO", logs_dir: str = "logs") -> None:
-    """Идемпотентен: повторный вызов снимает все предыдущие sink'и и пересоздаёт их."""
+def setup_logging(
+    level: str = "INFO",
+    logs_dir: str = "logs",
+    *,
+    seq: "SeqConfig | None" = None,
+    environment: str = "dev",
+) -> None:
+    """Идемпотентен: повторный вызов снимает все предыдущие sink'и и пересоздаёт их.
+
+    Если задан `seq` (включён + есть url) — добавляется HTTP-sink в Seq (CLEF).
+    """
     Path(logs_dir).mkdir(parents=True, exist_ok=True)
 
     logger.remove()
@@ -78,6 +91,24 @@ def setup_logging(level: str = "INFO", logs_dir: str = "logs") -> None:
         diagnose=True,
         filter=_redact_secrets,
     )
+
+    # Опциональный sink в Seq. enqueue=True — HTTP-отправка в фоновом потоке,
+    # чтобы не блокировать asyncio event loop воркера.
+    if seq is not None and seq.enabled and seq.url:
+        from obratka.observability.seq_sink import make_seq_sink
+
+        logger.add(
+            make_seq_sink(
+                seq.url,
+                api_key=seq.api_key,
+                timeout=seq.timeout_s,
+                static_props={"service": seq.service, "environment": environment},
+            ),
+            level=seq.level,
+            format="{message}",  # sink читает record напрямую; формат не используется
+            enqueue=True,
+            filter=_redact_secrets,
+        )
 
 
 def get_logger(name: str | None = None):

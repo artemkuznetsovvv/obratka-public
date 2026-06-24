@@ -358,9 +358,31 @@ docker compose logs -f llm-pipeline | grep -E "ERROR|WARN"
 ```
 
 Если хотите централизованные логи — `loguru` пишет в stdout, который docker отдаёт
-своим logging-driver. На стэке поднят Seq (`logs.193.233.217.223.sslip.io`), но
-**Python-worker туда пока не отправляет** (Seq настроен только под .NET сервисы через
-Serilog). Если потребуется — добавить sink `loguru → seq` отдельной задачей.
+своим logging-driver. На стэке поднят Seq (`logs.193.233.217.223.sslip.io`).
+
+**Отправка в Seq из Python-worker** реализована (sink `loguru → seq`, CLEF поверх
+HTTP — тот же формат, что у .NET через Serilog). Включается env-переменными:
+
+```bash
+SEQ__ENABLED=true
+SEQ__URL=http://seq:80    # ВНУТРЕННИЙ адрес Seq в docker-сети; sink сам добавит /ingest/clef
+SEQ__API_KEY=<ingestion-key>  # обязателен: ingestion закрыт ключом (как Seq__ApiKey у .NET)
+SEQ__LEVEL=INFO           # минимальный уровень, который шлём (по умолчанию INFO)
+SEQ__SERVICE=obratka-llm  # свойство service в Seq — фильтровать наши логи
+```
+
+Seq и worker на стенде в одной docker-сети, поэтому `SEQ__URL` — это **внутренний**
+адрес контейнера Seq, тот же, что используют .NET-сервисы в Serilog-конфигурации
+(`Seq__ServerUrl: "http://seq:80"`); публичный `logs.*.sslip.io` не нужен (трафик не
+выходит наружу). Ingestion закрыт API-ключом — выпустите отдельный ingestion-key в
+Seq (Settings → API Keys) и положите в `SEQ__API_KEY`. Worker должен быть подключён
+к той же сети (см. `networks` в compose PG-стека).
+
+Отправка идёт в фоновом потоке (`enqueue=True`) и best-effort: недоступность Seq
+не роняет worker, при первой ошибке пишется одно предупреждение в stderr.
+Структурированные поля (`step`, `run_id`, `analysis_job_id`, `model`, …) попадают
+в Seq как свойства события — по ним удобно фильтровать. После включения проверьте,
+что в Seq появились события с `service = obratka-llm`.
 
 ### 3.3. Почистить job_state (после rollback или несовместимого изменения схемы)
 

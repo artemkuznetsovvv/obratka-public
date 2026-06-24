@@ -57,7 +57,12 @@ def ensure_runtime_initialized(settings: Settings) -> None:
     with _runtime_init_lock:
         if _runtime_initialized:
             return
-        setup_logging(level=settings.log_level, logs_dir=settings.logs_dir)
+        setup_logging(
+            level=settings.log_level,
+            logs_dir=settings.logs_dir,
+            seq=settings.seq,
+            environment=settings.app_env,
+        )
         setup_phoenix(settings)
         _runtime_initialized = True
 
