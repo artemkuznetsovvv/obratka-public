@@ -98,7 +98,74 @@ class LLMClient:
             raise KeyError(f"Unknown model alias: {model}")
 
         self._ensure_clients()
-        cfg = self.models[model]
+        return await self._complete_cfg(
+            self.models[model],
+            messages=messages,
+            response_model=response_model,
+            max_retries=max_retries,
+            temperature=temperature,
+            timeout=timeout,
+            request_id=request_id,
+        )
+
+    async def _complete_cfg(
+        self,
+        cfg: ModelConfig,
+        *,
+        messages: list[dict],
+        response_model: Type[T] | None,
+        max_retries: int,
+        temperature: float,
+        timeout: float,
+        request_id: str | None,
+    ) -> tuple[T | str, UsageInfo]:
+        """Вызов конкретной модели с переходом на cfg.fallback при ошибке.
+
+        Ловим широко (Exception): instructor оборачивает ошибки провайдера
+        (404 «No endpoints found», rate-limit и пр.) в свои исключения, поэтому
+        узкая фильтрация по типам openai пропустила бы их. CancelledError —
+        BaseException и сюда не попадает.
+        """
+        try:
+            return await self._call_once(
+                cfg,
+                messages=messages,
+                response_model=response_model,
+                max_retries=max_retries,
+                temperature=temperature,
+                timeout=timeout,
+                request_id=request_id,
+            )
+        except Exception as e:
+            if cfg.fallback is None:
+                raise
+            log.bind(request_id=request_id or "-").warning(
+                "LLM primary model failed, falling back to backup",
+                primary=cfg.openrouter_id,
+                fallback=cfg.fallback.openrouter_id,
+                error=f"{type(e).__name__}: {e}",
+            )
+            return await self._complete_cfg(
+                cfg.fallback,
+                messages=messages,
+                response_model=response_model,
+                max_retries=max_retries,
+                temperature=temperature,
+                timeout=timeout,
+                request_id=request_id,
+            )
+
+    async def _call_once(
+        self,
+        cfg: ModelConfig,
+        *,
+        messages: list[dict],
+        response_model: Type[T] | None,
+        max_retries: int,
+        temperature: float,
+        timeout: float,
+        request_id: str | None,
+    ) -> tuple[T | str, UsageInfo]:
         rlog = log.bind(model=cfg.openrouter_id, request_id=request_id or "-")
 
         rlog.debug(

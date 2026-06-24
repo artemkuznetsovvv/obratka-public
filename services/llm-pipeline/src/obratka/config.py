@@ -19,6 +19,15 @@ class ModelConfig(BaseModel):
     openrouter_id: str
     pricing: ModelPricing
     max_tokens_default: int = 1024
+    # Резервная модель: если основная недоступна/падает (напр. OpenRouter
+    # «No endpoints found» или rate-limit), LLMClient повторит вызов на ней.
+    # Можно строить цепочку (fallback у fallback).
+    fallback: "ModelConfig | None" = None
+
+
+# Самоссылающаяся модель (fallback: ModelConfig) — нужен rebuild при
+# `from __future__ import annotations`.
+ModelConfig.model_rebuild()
 
 
 class WeightingStrategy(str, Enum):
@@ -66,6 +75,11 @@ def _default_models() -> dict[str, ModelConfig]:
         "translate": ModelConfig(
             openrouter_id="google/gemini-2.0-flash-001",
             pricing=ModelPricing(input_per_m=0.10, output_per_m=0.40),
+            # Если Gemini недоступен у OpenRouter — переводим через ChatGPT.
+            fallback=ModelConfig(
+                openrouter_id="openai/gpt-4o-mini",
+                pricing=ModelPricing(input_per_m=0.15, output_per_m=0.60),
+            ),
         ),
         "fakes": ModelConfig(
             openrouter_id="openai/gpt-4o-mini",
