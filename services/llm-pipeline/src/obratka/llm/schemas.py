@@ -193,3 +193,8 @@ class BusinessContext(BaseModel):
     location: str | None
     branches_count: int = 1
     custom_notes: str | None = None
+    # Опциональный бизнес-контекст из input.json (sibling к company_id).
+    # Backward-compat: всё None, если бэк не прислал.
+    business_category: str | None = None
+    business_subcategory: str | None = None
+    additional_context: str | None = None

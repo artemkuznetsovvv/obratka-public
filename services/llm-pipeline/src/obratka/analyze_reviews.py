@@ -532,6 +532,12 @@ async def analyze_payload_llm(
     if not reviews:
         return [], _recommendations([], [])
 
+    # Опциональный бизнес-контекст (sibling к company_id). .get() — никогда не
+    # падаем на отсутствии; могут быть None (старые входы / live / QA).
+    business_category = data.get("business_category")
+    business_subcategory = data.get("business_subcategory")
+    additional_context = data.get("additional_context")
+
     s = settings or get_settings()
     ensure_runtime_initialized(s)
 
@@ -582,8 +588,11 @@ async def analyze_payload_llm(
     context = BusinessContext(
         business_id=business_id,
         name=None,
-        business_type="unknown",
+        business_type=business_category or "unknown",
         location=None,
+        business_category=business_category,
+        business_subcategory=business_subcategory,
+        additional_context=additional_context,
     )
     recs = await generate_recommendations(pipeline_result, context, llm_client)
     recommendations = _recommendations_to_contract(recs.recommendations, recs.summary)
