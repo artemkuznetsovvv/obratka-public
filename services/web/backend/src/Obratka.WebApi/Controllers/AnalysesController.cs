@@ -86,7 +86,12 @@ public sealed class AnalysesController(
         {
             pgResponse = await gateway.StartAnalysisAsync(
                 new StartAnalysisQaRequest(
-                    request.CompanyId, request.PeriodFrom, request.PeriodTo, specs),
+                    request.CompanyId, request.PeriodFrom, request.PeriodTo, specs,
+                    // Бизнес-контекст из формы нового анализа (хранится на Company) —
+                    // прокидываем в PG, чтобы тот вложил его в input.json для LLM.
+                    BusinessCategory: company.Category,
+                    BusinessSubcategory: company.Subcategory,
+                    AdditionalContext: company.Description),
                 ct);
         }
         catch (ProcessingGatewayException ex)

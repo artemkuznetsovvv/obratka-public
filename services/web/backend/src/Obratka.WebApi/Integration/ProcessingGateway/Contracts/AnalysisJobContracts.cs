@@ -49,7 +49,12 @@ public sealed record StartAnalysisQaRequest(
     DateTimeOffset? DateFrom,
     DateTimeOffset? DateTo,
     IReadOnlyList<StartAnalysisBranchSpec> Branches,
-    Guid? AnalysisJobId = null);
+    Guid? AnalysisJobId = null,
+    // Снимок бизнес-контекста компании на момент запуска → PG прокинет в input.json LLM.
+    // Сериализуется camelCase (businessCategory/...) — PG-модель связывается case-insensitive.
+    string? BusinessCategory = null,
+    string? BusinessSubcategory = null,
+    string? AdditionalContext = null);
 
 internal sealed record RawStartAnalysisResponse(
     [property: JsonPropertyName("analysisJobId")] Guid AnalysisJobId);
