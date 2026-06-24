@@ -34,6 +34,14 @@ public class TwoGisOptions
     public int NavigationTimeoutMs { get; set; } = 30_000;
 
     /// <summary>
+    /// Per-request timeout (seconds) for HTTP calls to the 2GIS reviews API.
+    /// Applied to the <see cref="System.Net.Http.HttpClient.Timeout"/> of the client used
+    /// in <see cref="TwoGisCollectionMode.Api"/> mode. Without it the client falls back to
+    /// .NET's default of 100s, which times out on slow proxies / large pages.
+    /// </summary>
+    public int RequestTimeoutSeconds { get; set; } = 300;
+
+    /// <summary>
     /// City slug for 2GIS URLs (e.g. "moscow", "spb").
     /// Used to build firm URL: https://2gis.ru/{City}/firm/{firmId}
     /// If empty, uses "moscow" as default.

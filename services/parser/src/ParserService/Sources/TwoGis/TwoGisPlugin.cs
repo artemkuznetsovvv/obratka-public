@@ -82,7 +82,7 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
                     attempt, reviews.Count);
                 break;
             }
-            catch (Exception ex) when (attempt < _options.MaxRetries && IsTransient(ex))
+            catch (Exception ex) when (attempt < _options.MaxRetries && IsTransient(ex, ct))
             {
                 lastException = ex;
                 var reason = ClassifyFailure(ex);
@@ -197,7 +197,7 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
                     await page.CloseAsync();
                 }
             }
-            catch (Exception ex) when (attempt < _options.MaxRetries && IsTransient(ex))
+            catch (Exception ex) when (attempt < _options.MaxRetries && IsTransient(ex, ct))
             {
                 lastException = ex;
                 var reason = ClassifyFailure(ex);
@@ -335,16 +335,24 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
         }
     }
 
-    private static HttpClient CreateHttpClient(ProxyInfo? proxy)
+    private HttpClient CreateHttpClient(ProxyInfo? proxy)
     {
+        // Без явного Timeout HttpClient берёт дефолт .NET = 100с и валится на медленных
+        // прокси / больших страницах ("The request was canceled due to the configured
+        // HttpClient.Timeout of 100 seconds elapsing"). Берём из TwoGisOptions.
+        var timeout = TimeSpan.FromSeconds(_options.RequestTimeoutSeconds);
+
         if (proxy == null)
-            return new HttpClient();
+            return new HttpClient { Timeout = timeout };
 
         var webProxy = new WebProxy(new Uri(proxy.Url));
         if (!string.IsNullOrEmpty(proxy.Username))
             webProxy.Credentials = new NetworkCredential(proxy.Username, proxy.Password);
 
-        return new HttpClient(new SocketsHttpHandler { Proxy = webProxy, UseProxy = true });
+        return new HttpClient(new SocketsHttpHandler { Proxy = webProxy, UseProxy = true })
+        {
+            Timeout = timeout
+        };
     }
 
     // ---- Private: search ----
@@ -442,22 +450,38 @@ public partial class TwoGisPlugin : IReviewSourcePlugin
         )).ToList();
     }
 
-    private static bool IsTransient(Exception ex)
+    // "Внешняя ошибка" = всё, что зависит от сети/прокси/целевого сайта и может пройти
+    // со следующей попытки. НЕ ретраим только реальную отмену снаружи (ct) и баги кода.
+    private static bool IsTransient(Exception ex, CancellationToken ct)
     {
-        if (ex is HttpRequestException or TimeoutException)
-            return true;
-        if (ex is PlaywrightException pe)
-            return pe.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase)
-                || pe.Message.Contains("net::", StringComparison.OrdinalIgnoreCase);
-        return false;
+        // Настоящая отмена задачи снаружи (shutdown / таймаут задачи в PG) — не ретраим.
+        if (ct.IsCancellationRequested)
+            return false;
+
+        return ex switch
+        {
+            HttpRequestException => true,
+            TimeoutException => true,
+            System.IO.IOException => true,
+            System.Net.Sockets.SocketException => true,
+            // HttpClient.Timeout бросает TaskCanceledException (inner TimeoutException),
+            // а НЕ TimeoutException. Раз ct не отменён — это таймаут запроса, ретраим.
+            OperationCanceledException => true,
+            PlaywrightException pe =>
+                pe.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase)
+                || pe.Message.Contains("net::", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
     }
 
     private static ProxyFailureReason ClassifyFailure(Exception ex) => ex switch
     {
         TimeoutException => ProxyFailureReason.Timeout,
+        OperationCanceledException => ProxyFailureReason.Timeout, // HttpClient.Timeout
         HttpRequestException { StatusCode: System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.Unauthorized }
             => ProxyFailureReason.ServerError,
         HttpRequestException => ProxyFailureReason.ConnectionError,
+        System.IO.IOException or System.Net.Sockets.SocketException => ProxyFailureReason.ConnectionError,
         PlaywrightException pe when pe.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase)
             => ProxyFailureReason.Timeout,
         PlaywrightException pe when pe.Message.Contains("net::", StringComparison.OrdinalIgnoreCase)
