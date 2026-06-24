@@ -98,6 +98,21 @@ class PhoenixConfig(BaseModel):
     ui_url_template: str = "http://localhost:6006/projects/{project}/traces/{trace_id}"
 
 
+class SeqConfig(BaseModel):
+    """Отправка loguru-логов в Seq (CLEF поверх HTTP).
+
+    Включается через SEQ__ENABLED=true + SEQ__URL=https://logs.example. На стэке
+    Seq уже принимает .NET-сервисы через Serilog — Python шлёт в тот же формат.
+    """
+
+    enabled: bool = False
+    url: str = ""
+    api_key: str | None = None
+    level: str = "INFO"
+    timeout_s: float = 5.0
+    service: str = "obratka-llm"
+
+
 class ReportConfig(BaseModel):
     enabled: bool = False
     output_dir: str = "reports"
@@ -128,6 +143,7 @@ class Settings(BaseSettings):
     pipeline: PipelineConfig = PipelineConfig()
     prompts: PromptVersions = PromptVersions()
     phoenix: PhoenixConfig = PhoenixConfig()
+    seq: SeqConfig = SeqConfig()
     report: ReportConfig = ReportConfig()
 
 
