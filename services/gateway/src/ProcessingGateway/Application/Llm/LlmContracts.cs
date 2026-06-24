@@ -4,11 +4,19 @@ namespace ProcessingGateway.Application.Llm;
 
 /// `s3://obratka-jobs/{jobId}/input.json` — мы пишем, LLM читает (ADR-004 §2, schema 2.0).
 /// `review_id` — long (отклонение от ADR-004, фиксируется в LLM_PYTHON_QUICKSTART.md).
+///
+/// `business_category`/`business_subcategory`/`additional_context` — **аддитивные опциональные**
+/// поля бизнес-контекста компании (из формы нового анализа). schema_version НЕ меняется (2.0):
+/// по политике контракта (llm_contracts_changed.md §6) новые поля версию не бампают, а Python-LLM
+/// читает input.json как dict и игнорирует незнакомые ключи. Если контекста нет — едет `null`.
 public record LlmInput(
     [property: JsonPropertyName("schema_version")] string SchemaVersion,
     [property: JsonPropertyName("analysis_job_id")] Guid AnalysisJobId,
     [property: JsonPropertyName("company_id")] Guid CompanyId,
-    [property: JsonPropertyName("reviews")] IReadOnlyList<LlmInputReview> Reviews);
+    [property: JsonPropertyName("reviews")] IReadOnlyList<LlmInputReview> Reviews,
+    [property: JsonPropertyName("business_category")] string? BusinessCategory = null,
+    [property: JsonPropertyName("business_subcategory")] string? BusinessSubcategory = null,
+    [property: JsonPropertyName("additional_context")] string? AdditionalContext = null);
 
 public record LlmInputReview(
     [property: JsonPropertyName("review_id")] long ReviewId,

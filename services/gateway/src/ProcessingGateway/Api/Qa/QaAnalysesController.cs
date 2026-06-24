@@ -37,7 +37,11 @@ public sealed class QaAnalysesController : ControllerBase
         DateTimeOffset? DateFrom,
         DateTimeOffset? DateTo,
         IReadOnlyList<BranchSpec> Branches,
-        Guid? AnalysisJobId = null);  // override для предсказуемых интеграционных тестов
+        Guid? AnalysisJobId = null,           // override для предсказуемых интеграционных тестов
+        // Опциональный бизнес-контекст компании (Web API читает из webapi_db.Company) → input.json LLM.
+        string? BusinessCategory = null,
+        string? BusinessSubcategory = null,
+        string? AdditionalContext = null);
 
     public sealed record StartAnalysisQaResponse(Guid AnalysisJobId);
 
@@ -65,7 +69,10 @@ public sealed class QaAnalysesController : ControllerBase
             CompanyId: request.CompanyId,
             DateFrom: request.DateFrom,
             DateTo: request.DateTo,
-            Branches: request.Branches);
+            Branches: request.Branches,
+            BusinessCategory: request.BusinessCategory,
+            BusinessSubcategory: request.BusinessSubcategory,
+            AdditionalContext: request.AdditionalContext);
 
         await _publisher.Publish(cmd, pubCtx => pubCtx.CorrelationId = jobId, ct);
 

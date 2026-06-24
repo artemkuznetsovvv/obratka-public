@@ -78,6 +78,10 @@ public sealed class StartAnalysisCommandConsumer : IConsumer<StartAnalysisComman
         {
             Id = msg.AnalysisJobId,
             CompanyId = msg.CompanyId,
+            // Снимок бизнес-контекста компании на момент запуска — позже уедет в input.json LLM.
+            BusinessCategory = msg.BusinessCategory,
+            BusinessSubcategory = msg.BusinessSubcategory,
+            AdditionalContext = msg.AdditionalContext,
             Status = AnalysisJobStatus.Pending,
             CreatedAt = DateTimeOffset.UtcNow,
             CollectionProgress = new Dictionary<string, CollectionProgressEntry>()

@@ -5,12 +5,19 @@ namespace ProcessingGateway.Application.Messaging.Contracts;
 /// Команда «запустить анализ» — публикуется Web API (когда появится) либо QA-эндпоинтом
 /// `POST /api/qa/analyses` (Bootstrap-ручка, см. IMPLEMENTATION_PLAN.md). Слушает PG.
 /// Решение №4 Этапа 0: фиксируем нашу версию контракта; адаптируем при появлении Web API.
+/// Бизнес-контекст компании (`BusinessCategory`/`BusinessSubcategory`/`AdditionalContext`) —
+/// опциональный снимок из формы нового анализа (Web API читает из `Company` в `webapi_db`).
+/// Аддитивное расширение контракта: дефолты null → старые продьюсеры/тесты компилируются и
+/// работают без изменений. Доезжает до LLM через `input.json` (см. LlmDispatcher).
 public record StartAnalysisCommand(
     Guid AnalysisJobId,
     Guid CompanyId,
     DateTimeOffset? DateFrom,
     DateTimeOffset? DateTo,
-    IReadOnlyList<BranchSpec> Branches);
+    IReadOnlyList<BranchSpec> Branches,
+    string? BusinessCategory = null,
+    string? BusinessSubcategory = null,
+    string? AdditionalContext = null);
 
 public record BranchSpec(
     Guid BranchId,

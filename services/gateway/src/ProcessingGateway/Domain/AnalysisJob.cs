@@ -13,6 +13,17 @@ public class AnalysisJob
 
     public Guid CompanyId { get; set; }
 
+    /// Снимок бизнес-контекста компании на момент запуска анализа (приходит в
+    /// `StartAnalysisCommand` от Web API, который читает его из `Company` в `webapi_db` —
+    /// PG в чужую БД не ходит). Прокидывается в `input.json` как доп. контекст для LLM.
+    /// Опционально: старые/QA-запуски без контекста оставляют null.
+    public string? BusinessCategory { get; set; }
+
+    public string? BusinessSubcategory { get; set; }
+
+    /// Свободный текст «Дополнительный контекст» из формы нового анализа (Company.Description).
+    public string? AdditionalContext { get; set; }
+
     public AnalysisJobStatus Status { get; set; }
 
     public int ReviewCount { get; set; }

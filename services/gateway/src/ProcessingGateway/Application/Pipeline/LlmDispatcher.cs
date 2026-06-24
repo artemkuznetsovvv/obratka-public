@@ -103,7 +103,11 @@ public sealed class LlmDispatcher
                 Date: r.ReviewDate,
                 Stars: r.Stars,
                 BranchId: r.BranchId,
-                TextLanguage: r.TextLanguage)).ToList());
+                TextLanguage: r.TextLanguage)).ToList(),
+            // Бизнес-контекст компании (снимок из StartAnalysisCommand). Опционален — может быть null.
+            BusinessCategory: job.BusinessCategory,
+            BusinessSubcategory: job.BusinessSubcategory,
+            AdditionalContext: job.AdditionalContext);
 
         await _blob.WriteInputAsync(jobId, input, ct);
 

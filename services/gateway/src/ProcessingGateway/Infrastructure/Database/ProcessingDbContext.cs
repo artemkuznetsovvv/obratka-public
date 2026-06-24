@@ -63,6 +63,11 @@ public class ProcessingDbContext : DbContext
             // Внешний UUID — клиент (Web API / QA-эндпоинт) генерирует и протекает дальше.
             b.Property(x => x.Id).ValueGeneratedNever();
 
+            // Снимок бизнес-контекста компании (для input.json LLM). Опциональны.
+            b.Property(x => x.BusinessCategory).HasMaxLength(200);
+            b.Property(x => x.BusinessSubcategory).HasMaxLength(200);
+            // Свободный текст — без лимита длины (TEXT). На фронте textarea ограничена 4000.
+
             b.Property(x => x.Status)
                 .HasMaxLength(40)
                 .HasConversion(
