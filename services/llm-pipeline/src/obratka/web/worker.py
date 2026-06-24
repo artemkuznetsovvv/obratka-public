@@ -7,7 +7,11 @@
 - `uvicorn` поднимает FastAPI на `LLM_HTTP_PORT` для PG-status-поллинга.
 
 Концепции:
-- prefetch_count=1 — один job в обработке за раз; ядро параллелит батчи внутри.
+- prefetch_count = LLM_MAX_PARALLEL_JOBS (по умолчанию 3) — столько jobs
+  обрабатывается одновременно. aio-pika запускает обработчик каждого сообщения
+  отдельной задачей, поэтому prefetch и задаёт степень параллелизма между jobs.
+  Каждый job внутри параллелит батчи своим пулом (pipeline.max_concurrency),
+  так что пиковая нагрузка на OpenRouter ~ parallel_jobs × max_concurrency.
 - requeue=False при ошибке — PG имеет свою replay-ручку, локальный requeue
   заваливал бы DLQ при стабильно-плохом input.
 - Идемпотентность — повторный приход того же `analysis_job_id` перезатирает
@@ -29,9 +33,8 @@ from aio_pika import DeliveryMode, IncomingMessage, Message, connect_robust
 from aio_pika.abc import AbstractRobustChannel, AbstractRobustConnection
 from loguru import logger
 
-from obratka.analyze_reviews import analyze_payload_llm
+from obratka.analyze_reviews import analyze_payload_llm, ensure_runtime_initialized
 from obratka.config import get_settings
-from obratka.logging_setup import setup_logging
 from obratka.web.contract import SCHEMA_VERSION, build_outputs
 from obratka.web.s3 import S3Client
 from obratka.web.state import JobStateStore
@@ -64,14 +67,20 @@ class Worker:
         s3: S3Client,
         rabbit_url: str,
         results_queue_default: str = DEFAULT_RESULTS_QUEUE,
+        max_parallel_jobs: int = 3,
     ) -> None:
         self._store = store
         self._s3 = s3
         self._rabbit_url = rabbit_url
         self._results_queue_default = results_queue_default
+        self._max_parallel_jobs = max(1, max_parallel_jobs)
 
         self._connection: AbstractRobustConnection | None = None
         self._publish_channel: AbstractRobustChannel | None = None
+        # Несколько jobs могут завершиться одновременно и публиковать ответ
+        # в один и тот же канал — сериализуем публикации, чтобы не зависеть от
+        # тонкостей обработки publisher-confirms при конкурентных publish.
+        self._publish_lock = asyncio.Lock()
 
     # --- public --------------------------------------------------------------
 
@@ -81,9 +90,15 @@ class Worker:
         # publisher confirms / flow control не мешали consume и наоборот.
         self._publish_channel = await self._connection.channel()
         consume_channel = await self._connection.channel()
-        await consume_channel.set_qos(prefetch_count=1)
+        # prefetch = сколько jobs обрабатываем параллельно. aio-pika исполняет
+        # _on_message каждой доставки отдельной задачей, поэтому до N сообщений
+        # окажутся «в полёте» одновременно.
+        await consume_channel.set_qos(prefetch_count=self._max_parallel_jobs)
         queue = await consume_channel.declare_queue(REQUESTS_QUEUE, durable=True)
-        logger.info(f"AMQP worker listening on '{REQUESTS_QUEUE}' queue")
+        logger.info(
+            f"AMQP worker listening on '{REQUESTS_QUEUE}' queue "
+            f"(max_parallel_jobs={self._max_parallel_jobs})"
+        )
         await queue.consume(self._on_message)
         # Висим вечно — соединение `connect_robust` пере-подключается само.
         await asyncio.Future()
@@ -214,20 +229,30 @@ class Worker:
         if self._publish_channel is None:
             raise RuntimeError("AMQP publish channel is not initialised")
         # Persistent + durable queue → ответ переживёт рестарт брокера.
-        await self._publish_channel.default_exchange.publish(
-            Message(
-                body=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-                content_type="application/json",
-                delivery_mode=DeliveryMode.PERSISTENT,
-            ),
-            routing_key=queue_name,
-        )
+        async with self._publish_lock:
+            await self._publish_channel.default_exchange.publish(
+                Message(
+                    body=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                    content_type="application/json",
+                    delivery_mode=DeliveryMode.PERSISTENT,
+                ),
+                routing_key=queue_name,
+            )
 
 
 # --- bootstrap ---------------------------------------------------------------
 
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _positive_int(value: str | None, *, default: int) -> int:
+    """Парсит положительный int из env; при пустом/битом значении — default."""
+    try:
+        parsed = int((value or "").strip())
+    except ValueError:
+        return default
+    return parsed if parsed >= 1 else default
 
 
 def _build_components() -> tuple[Worker | None, JobStateStore, int, bool, Path]:
@@ -241,12 +266,15 @@ def _build_components() -> tuple[Worker | None, JobStateStore, int, bool, Path]:
         pass
 
     settings = get_settings()
-    setup_logging(level=settings.log_level, logs_dir=settings.logs_dir)
+    # Разовая настройка логирования + Phoenix. Тот же guard переиспользуется
+    # в analyze_payload_llm, поэтому первый job не будет реконфигурировать sink'и.
+    ensure_runtime_initialized(settings)
 
     http_port = int(os.environ.get("LLM_HTTP_PORT", "8000"))
     state_db = os.environ.get("LLM_STATE_DB", "data/job_state.sqlite")
     qa_enabled = _truthy(os.environ.get("OBRATKA_QA_ENABLED"))
     qa_output_dir = Path(os.environ.get("LLM_QA_OUTPUT_DIR", "qa_outputs"))
+    max_parallel_jobs = _positive_int(os.environ.get("LLM_MAX_PARALLEL_JOBS"), default=3)
 
     store = JobStateStore(state_db)
 
@@ -282,7 +310,12 @@ def _build_components() -> tuple[Worker | None, JobStateStore, int, bool, Path]:
             secret_key=s3_secret,      # type: ignore[arg-type]
             bucket=s3_bucket,
         )
-        worker = Worker(store=store, s3=s3, rabbit_url=rabbit_url)  # type: ignore[arg-type]
+        worker = Worker(
+            store=store,
+            s3=s3,
+            rabbit_url=rabbit_url,  # type: ignore[arg-type]
+            max_parallel_jobs=max_parallel_jobs,
+        )
 
     return worker, store, http_port, qa_enabled, qa_output_dir
 

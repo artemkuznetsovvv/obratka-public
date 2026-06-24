@@ -23,8 +23,6 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-LOW_CONF_THRESHOLD = 0.5
-
 
 def needs_reclassification(analysis: ReviewAnalysis, threshold: float) -> tuple[bool, str]:
     if analysis.overall_confidence < threshold:
@@ -97,9 +95,6 @@ async def step2_run(
     *,
     collector: "ArtifactCollector | None" = None,
 ) -> tuple[list[ReviewAnalysis], list[LowConfItem]]:
-    global LOW_CONF_THRESHOLD
-    LOW_CONF_THRESHOLD = low_conf_threshold
-
     started_at = datetime.now()
     async with step_span("step2", reviews_count=len(reviews), batch_size=batch_size) as span:
         log.info("Step 2 start", reviews_count=len(reviews), batch_size=batch_size)

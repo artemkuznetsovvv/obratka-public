@@ -11,6 +11,7 @@ import asyncio
 import json
 import re
 import sys
+import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -35,6 +36,30 @@ from obratka.steps.step4_recommend import generate_recommendations
 
 SENTIMENTS = {"positive", "negative", "neutral", "mixed", "unknown"}
 log = get_logger(__name__)
+
+# Разовая инициализация логирования/трейсинга. `setup_logging` снимает все sink'и
+# и пересоздаёт их — при параллельных jobs два конкурентных вызова могли бы
+# потерять/задублировать sink'и, поэтому инициализируем строго один раз.
+_runtime_init_lock = threading.Lock()
+_runtime_initialized = False
+
+
+def ensure_runtime_initialized(settings: Settings) -> None:
+    """Разово настраивает логирование и Phoenix-трейсинг для процесса.
+
+    Идемпотентна и потокобезопасна — повторные вызовы (в т.ч. из параллельных
+    jobs) не пересоздают sink'и. Вызывается на старте воркера и в начале каждого
+    `analyze_payload_llm`, чтобы CLI/QA-входы тоже инициализировались.
+    """
+    global _runtime_initialized
+    if _runtime_initialized:
+        return
+    with _runtime_init_lock:
+        if _runtime_initialized:
+            return
+        setup_logging(level=settings.log_level, logs_dir=settings.logs_dir)
+        setup_phoenix(settings)
+        _runtime_initialized = True
 
 RU_TO_CONTRACT_SENTIMENT = {
     "очень позитивный": "positive",
@@ -503,8 +528,7 @@ async def analyze_payload_llm(
         return [], _recommendations([], [])
 
     s = settings or get_settings()
-    setup_logging(level=s.log_level, logs_dir=s.logs_dir)
-    setup_phoenix(s)
+    ensure_runtime_initialized(s)
 
     llm_client = llm or LLMClient(api_key=s.openrouter_api_key, models=s.models)
     runner: BatchRunner = BatchRunner(max_concurrency=s.pipeline.max_concurrency)
