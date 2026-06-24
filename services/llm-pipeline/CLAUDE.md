@@ -126,3 +126,6 @@ poetry run python -m obratka.analyze_reviews --input input.json --out-dir ./out
 ## Старт разработки
 
 Реализовывать задачи в порядке нумерации. Каждый `.md` в `tasks/` — самодостаточное ТЗ с примерами входа/выхода и критериями готовности.
+
+
+Ktjsdjnvadasdf
