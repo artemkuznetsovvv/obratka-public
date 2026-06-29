@@ -1,0 +1,57 @@
+# Локальный запуск worker-а в QA-режиме (без RabbitMQ + S3).
+#
+# Что поднимает:
+#  - obratka-llm-worker — FastAPI на http://localhost:8000 с активной QA-ручкой.
+#
+# Зачем:
+#  - Возможность прогнать input.json через `POST /qa/analyze` без поднятия PG-стека.
+#  - Результаты пишутся в ./qa_outputs/<analysis_job_id>/ — видно с хоста.
+#
+# Для интеграции с реальным Processing Gateway:
+#  - убери env-переменную OBRATKA_QA_ENABLED;
+#  - задай RABBIT_URL / S3_ENDPOINT / S3_ACCESS_KEY / S3_SECRET_KEY (см. .env.worker.example);
+#  - подключи контейнер к docker-сети PG (`parser-internal`) через networks: external.
+
+services:
+  obratka-llm-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: obratka-llm-worker:latest
+    container_name: obratka-llm-worker
+    restart: unless-stopped
+
+    # OPENROUTER_API_KEY из .env (из корня проекта).
+    env_file:
+      - .env
+
+    # Дефолты QA-режима. Перетирают то, что в .env, — поэтому даже без правки .env
+    # ручка /qa/analyze будет активна.
+    environment:
+      OBRATKA_QA_ENABLED: "true"
+      LLM_HTTP_PORT: "8000"
+      LLM_QA_OUTPUT_DIR: /app/qa_outputs
+      LLM_STATE_DB: /app/data/job_state.sqlite
+      LOGS_DIR: /app/logs
+      LOG_LEVEL: INFO
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      # Bind-mount, чтобы output-файлы было видно из проводника Windows.
+      - ./qa_outputs:/app/qa_outputs
+      # Persistent state — переживает рестарт контейнера, /status корректно работает.
+      - llm-state:/app/data
+      - llm-logs:/app/logs
+
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/live', timeout=2).getcode()==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  llm-state:
+  llm-logs:

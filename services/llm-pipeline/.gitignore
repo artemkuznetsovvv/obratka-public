@@ -1,0 +1,59 @@
+# Python / bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local secrets and machine-specific env
+.env
+.env.*
+!.env.example
+!.env.worker.example
+
+# Runtime logs and generated outputs
+logs/
+*.log
+reports/
+*.html
+
+# Local/sample datasets and generated review payloads
+data/*.json
+!data/.gitkeep
+
+# Tests and local QA artifacts (not part of production upload)
+tests/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Dev/demo visualization and local observability components
+src/obratka/report/
+docker-compose.phoenix.yml
+
+# Build and packaging artifacts
+*.egg-info/
+dist/
+build/
+
+# Tool caches
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# OS / editor noise
+.DS_Store
+.idea/
+.vscode/
+.claude/
+
+# Локальные артефакты пайплайна (входы тестовых прогонов, выходы анализа,
+# QA-дампы). Не должны попадать ни в git, ни в docker-image (см. .dockerignore).
+out/
+qa_outputs/
+input*.json
+llm_response.json

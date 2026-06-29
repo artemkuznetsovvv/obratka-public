@@ -1,0 +1,52 @@
+# LLM-сервис как docker-контейнер для подключения к Processing Gateway.
+# Поднимает AMQP-консьюмер (queue `llm.requests`) и FastAPI-status (port 8000).
+# В docker-compose нужно положить в ту же сеть, что rabbitmq + minio (`parser-internal`).
+
+FROM python:3.12-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    POETRY_VERSION=1.8.5 \
+    POETRY_VIRTUALENVS_CREATE=false \
+    POETRY_NO_INTERACTION=1
+
+WORKDIR /app
+
+# Системные зависимости: build-essential для opentelemetry-grpc, ca-certificates
+# для TLS к S3/RabbitMQ.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir "poetry==${POETRY_VERSION}"
+
+# `langdetect` распространяется только sdist'ом (без wheel). Poetry 1.8.x пытается
+# собрать его через `virtualenv`, который в свежих минорных версиях сломан
+# (см. https://github.com/python-poetry/poetry/issues/9966 — ImportError LogCmd).
+# pip собирает sdist через свою собственную build-isolation и работает чисто.
+# Ставим заранее тем pip-ом, потом `poetry install` увидит installed-дистрибутив
+# и пропустит попытку собрать своими руками.
+RUN pip install --no-cache-dir "langdetect==1.0.9"
+
+# Слой зависимостей кэшируется отдельно — не пересобираем при изменениях кода.
+COPY pyproject.toml poetry.lock* /app/
+RUN poetry install --only main --no-root --no-ansi
+
+COPY src /app/src
+# README.md требует poetry: он декларирован в pyproject.toml как readme.
+COPY README.md /app/README.md
+RUN poetry install --only main --no-ansi
+
+# Каталоги для persistence/output. В docker-compose они переопределяются volume-ами,
+# но создаём заранее на случай запуска без compose.
+RUN mkdir -p /app/data /app/logs /app/qa_outputs
+ENV LLM_STATE_DB=/app/data/job_state.sqlite \
+    LLM_HTTP_PORT=8000 \
+    LLM_QA_OUTPUT_DIR=/app/qa_outputs
+
+EXPOSE 8000
+
+# Для healthcheck из docker-compose уже есть в compose.yml — здесь дублировать не нужно.
+CMD ["obratka-worker"]

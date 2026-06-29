@@ -1,0 +1,33 @@
+# Не тащим в образ ничего лишнего — это ускоряет билд и уменьшает размер.
+
+.git
+.gitignore
+.github
+.idea
+.vscode
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Локальные артефакты, которые точно не нужны в образе.
+qa_outputs/
+logs/
+data/
+out/
+reports/
+tests/
+
+# Сэмплы и документация — не нужны в проде. README.md оставляем,
+# его требует poetry install (декларирован в pyproject.toml как readme).
+*.md
+!README.md
+input*.json
