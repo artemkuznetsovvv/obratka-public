@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-ProcessingGateway.LlmStub-d2ee00bb-606d-4352-9bc0-c8f24635192e</UserSecretsId>
+    <!--
+      ProjectReference на ProcessingGateway тянет его appsettings.json/appsettings.Development.json
+      в publish output, а у стуба свои. NETSDK1152 валит publish. Берём наши.
+    -->
+    <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" Version="4.0.22.2" />
+    <!-- См. комментарий в ProcessingGateway.csproj — MassTransit 9.x требует лицензию. -->
+    <PackageReference Include="MassTransit.RabbitMQ" Version="8.*" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.6" />
+    <PackageReference Include="Serilog.AspNetCore" Version="10.*" />
+    <PackageReference Include="Serilog.Enrichers.Environment" Version="3.0.1" />
+    <PackageReference Include="Serilog.Sinks.Seq" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ProcessingGateway\ProcessingGateway.csproj" />
+  </ItemGroup>
+</Project>

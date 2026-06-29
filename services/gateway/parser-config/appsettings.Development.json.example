@@ -1,0 +1,39 @@
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+
+  "//RateLimiting": "Уменьшенные delay для dev-стенда (production: 10000-30000ms между организациями + 15 orgs/hour лимит).",
+  "RateLimiting": {
+    "Sources": {
+      "yandex": {
+        "MaxConcurrentOrgs": 1,
+        "MaxOrgsPerHour": 0,
+        "DelayAfterOrgMinMs": 500,
+        "DelayAfterOrgMaxMs": 1500
+      },
+      "2gis": {
+        "MaxConcurrentOrgs": 1,
+        "MaxOrgsPerHour": 0,
+        "DelayAfterOrgMinMs": 500,
+        "DelayAfterOrgMaxMs": 1500
+      },
+      "google": {
+        "MaxConcurrentOrgs": 1,
+        "MaxOrgsPerHour": 0,
+        "DelayAfterOrgMinMs": 500,
+        "DelayAfterOrgMaxMs": 1500
+      }
+    }
+  },
+
+  "//Proxy": "Раскомментируй и подставь свои прокси, если работаешь с антиботными источниками (yandex/google). Пример формата — Parser-Service/deploy-vps.md шаг 7.1.",
+  "//Proxy_example": {
+    "Servers": [
+      { "Protocol": "http", "Host": "proxy.example.com", "Port": 8000, "Username": "user", "Password": "pass" }
+    ]
+  }
+}

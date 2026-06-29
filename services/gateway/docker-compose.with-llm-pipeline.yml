@@ -1,0 +1,90 @@
+# Override для подключения реального LLM-сервиса (obratka-llm-worker) к локальному PG-стэку.
+# Заменяет LlmStub при e2e-тестах с настоящим LLM.
+#
+# Запуск:
+#   1. Создай OPENROUTER_API_KEY в ../llm_pipline/.env (или скопируй из .env.worker.example)
+#   2. Останови LlmStub (он слушает ту же очередь llm.requests):
+#        docker compose -f docker-compose.yml -f docker-compose.full.yml stop llm-stub
+#   3. Подними весь стек с LLM-pipeline:
+#        docker compose -f docker-compose.yml -f docker-compose.full.yml -f docker-compose.with-llm-pipeline.yml up -d --build
+#
+# Доступы (на localhost):
+#   - PG:               http://localhost:8081  (X-Api-Key: dev-gateway-api-key)
+#   - Parser:           http://localhost:8080
+#   - LLM Pipeline:     http://localhost:8002  (REST: /health/live, /status/{jobId})
+#   - MinIO API:        http://localhost:9000  (minioadmin / minioadmin)
+#   - MinIO UI:         http://localhost:9001
+#   - RabbitMQ UI:      http://localhost:15672 (gateway / gateway_pwd)
+#   - Seq UI:           http://localhost:5342  (без логина)
+#
+# ВАЖНО — текущий schema mismatch:
+#   PG-код пока на schema_version=1.0 (processedReview/fake_status/topics, один output.json).
+#   LLM-сервис публикует 2.0 (output_reviews.json + output_summary.json, aspects, raw JSON).
+#   До миграции PG-кода (см. backlog) e2e не сработает: LLM получит request, обработает,
+#   опубликует ответ — но PG не сможет распарсить (другой формат envelope + другие поля).
+#
+#   Что МОЖНО проверить сейчас:
+#     1. LLM-pipeline стартует, healthcheck зелёный
+#     2. LLM подписывается на llm.requests (видно в RabbitMQ Management UI)
+#     3. REST: curl http://localhost:8002/health/live → {"status":"alive"}
+#     4. Прогон input.json через QA-ручку LLM (в обход AMQP/PG):
+#          curl -X POST http://localhost:8002/qa/analyze \
+#               -H "Content-Type: application/json" \
+#               --data-binary "@input.json"
+#        (требует переменную OBRATKA_QA_ENABLED=true — раскомментируй ниже)
+#
+#   Что НЕ работает:
+#     - Запуск анализа через PG (POST /api/qa/analyses) → PG отправит request, LLM
+#       обработает, но обратный ингест провалится (schema mismatch). Job застрянет в
+#       sent_to_llm и через таймаут уйдёт в failed.
+#
+# Когда PG будет на 2.0 — этот override становится дефолтным режимом разработки.
+
+services:
+  llm-pipeline:
+    build:
+      context: ../llm_pipline
+      dockerfile: Dockerfile.worker
+    image: obratka-llm-worker:dev
+    container_name: obratka-llm-worker
+    restart: unless-stopped
+    environment:
+      # Подключение к локальной PG-инфраструктуре через docker DNS
+      RABBIT_URL: "amqp://gateway:gateway_pwd@rabbitmq:5672/"
+      S3_ENDPOINT: "http://minio:9000"
+      S3_ACCESS_KEY: "minioadmin"
+      S3_SECRET_KEY: "minioadmin"
+      S3_BUCKET: "obratka-jobs"
+      LLM_HTTP_PORT: "8000"
+      LLM_STATE_DB: /app/data/job_state.sqlite
+      LOGS_DIR: /app/logs
+      LOG_LEVEL: INFO
+      # Раскомментировать для активации QA-ручки /qa/analyze (прогон input.json в обход AMQP):
+      # OBRATKA_QA_ENABLED: "true"
+      # LLM_QA_OUTPUT_DIR: /app/qa_outputs
+    env_file:
+      # OPENROUTER_API_KEY обязателен — он в .env LLM-проекта.
+      # Если нет — `cp ../llm_pipline/.env.worker.example ../llm_pipline/.env` и заполни.
+      - ../llm_pipline/.env
+    ports:
+      - "8002:8000"   # снаружи — 8002 (8000 у нас не занят, но оставляем для симметрии с прод-vps)
+    volumes:
+      - llm-pipeline-state:/app/data
+      - llm-pipeline-logs:/app/logs
+      # Если включил OBRATKA_QA_ENABLED — раскомментируй:
+      # - ./llm-qa-outputs:/app/qa_outputs
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/live', timeout=2).getcode()==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  llm-pipeline-state:
+  llm-pipeline-logs:

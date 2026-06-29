@@ -1,0 +1,49 @@
+{
+  "task_id": "f4a7d82a-1c3a-4b2d-8e91-3a5c0e4d5f8e",
+  "job_id": "11111111-2222-3333-4444-555555555555",
+  "source": "yandex",
+  "company_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "collected_at": "2026-04-01T12:00:00+00:00",
+  "reviews": [
+    {
+      "external_id": "JoS68IiWmeE1u-qEEzk_52w16kfBxP",
+      "text": "Нет точной дислокации офиса! Каждый год новый подвал",
+      "date": "2026-03-30T10:11:55.113+00:00",
+      "stars": 3,
+      "branch_id": "e309d01c-c44b-4412-9455-3714ca056549",
+      "author_name": "Дмитрий .Т",
+      "author_public_id": "hh5tc3xazcpqtg1b1w2d72qjwc",
+      "text_language": "ru"
+    },
+    {
+      "external_id": "iziEv4_02kNXpDQpOtiHnRbxM0H10uM",
+      "text": "Хорошо ",
+      "date": "2026-03-23T18:00:04.309+00:00",
+      "stars": 5,
+      "branch_id": "e309d01c-c44b-4412-9455-3714ca056549",
+      "author_name": "s к",
+      "author_public_id": "kft90gkke6mqe9y7bmwhwy249g",
+      "text_language": "ru"
+    },
+    {
+      "external_id": "QdECKxkFuH80Oc74rTnTYRl3P_bbN7jFI",
+      "text": "Квалифицированные специалисты и быстрая доставка. Цены отличные.",
+      "date": "2026-03-13T12:35:17.316+00:00",
+      "stars": 5,
+      "branch_id": "e309d01c-c44b-4412-9455-3714ca056549",
+      "author_name": "Рустем Замалеев",
+      "author_public_id": "z323p7qq7qz8mhh7bzyd40n5d8",
+      "text_language": "ru"
+    },
+    {
+      "external_id": "-AylxaPgDzAV2N1EBVPAnEzWwaNL-g",
+      "text": "Все отлично 👌 менеджеры молодцы, обслуживание хорошее 👍",
+      "date": "2026-02-25T16:45:13.328+00:00",
+      "stars": 5,
+      "branch_id": "e309d01c-c44b-4412-9455-3714ca056549",
+      "author_name": "Олег Мик",
+      "author_public_id": "vsetotghe46",
+      "text_language": "ru"
+    }
+  ]
+}

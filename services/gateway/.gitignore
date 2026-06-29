@@ -1,0 +1,37 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.swp
+
+# Build output
+publish/
+out/
+*.pdb
+
+# Tests
+TestResults/
+*.coverage
+*.trx
+
+# Local secrets / data
+appsettings.Local.json
+appsettings.*.Local.json
+.env
+.env.*
+!.env.example
+
+# Docker volumes
+data/
+
+# OS
+.DS_Store
+Thumbs.db

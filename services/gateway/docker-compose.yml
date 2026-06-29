@@ -1,0 +1,140 @@
+# Локальная разработка PG.
+# На VPS — отдельный compose, который ходит в внешнюю сеть `parser-service_internal`
+# (Этап 11 IMPLEMENTATION_PLAN.md). Здесь поднимаем всё своим стеком.
+services:
+  processing-gateway:
+    build:
+      context: .
+      dockerfile: src/ProcessingGateway/Dockerfile
+    image: processing-gateway:dev
+    ports:
+      - "8081:8080" # 8080 уже занят Parser-ом в его compose; не смешиваем
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__ProcessingDb: "Host=processing-db;Port=5432;Database=processing;Username=processing_user;Password=processing_pwd"
+      # Parser локально не запускаем — base_url задан как stub, чтобы сервис стартовал;
+      # реальные вызовы пойдут с Этапа 5+ либо когда Parser-стенд будет в той же сети.
+      Parser__BaseUrl: "http://parser:8080"
+      Parser__PollIntervalSeconds: "4"
+      Parser__TaskTimeoutMinutes: "10"
+      S3__Endpoint: "http://minio:9000"
+      S3__AccessKey: "minioadmin"
+      S3__SecretKey: "minioadmin"
+      S3__BucketName: "obratka-jobs"
+      RabbitMq__Host: "rabbitmq"
+      RabbitMq__User: "gateway"
+      RabbitMq__Pass: "gateway_pwd"
+      Llm__RequestQueue: "llm.requests"
+      Llm__ResultQueue: "llm.results"
+      Pipeline__AutoFinalizeWithoutAggregates: "true"
+      Pipeline__AutoFinalizeAfterMinutes: "1"
+      Seq__ServerUrl: "http://seq:80"
+      Gateway__ApiKey: "dev-gateway-api-key"
+    depends_on:
+      seq:
+        condition: service_started
+      processing-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  llm-stub:
+    build:
+      context: .
+      dockerfile: tools/LlmStub/Dockerfile
+    image: processing-gateway-llm-stub:dev
+    environment:
+      DOTNET_ENVIRONMENT: Development
+      RabbitMq__Host: "rabbitmq"
+      RabbitMq__User: "gateway"
+      RabbitMq__Pass: "gateway_pwd"
+      S3__Endpoint: "http://minio:9000"
+      S3__AccessKey: "minioadmin"
+      S3__SecretKey: "minioadmin"
+      S3__BucketName: "obratka-jobs"
+      Seq__ServerUrl: "http://seq:80"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  processing-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: processing
+      POSTGRES_USER: processing_user
+      POSTGRES_PASSWORD: processing_pwd
+    ports:
+      # Локально пробрасываем 5433:5432 — чтобы не конфликтовать с системным Postgres
+      # на 5432 (если есть). Подключение из DBeaver/psql на localhost:5433.
+      # На VPS этот порт не пробрасывается — БД доступна только из docker-сети.
+      - "5433:5432"
+    volumes:
+      - processing-db-data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U processing_user -d processing"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    hostname: rabbit
+    environment:
+      RABBITMQ_DEFAULT_USER: gateway
+      RABBITMQ_DEFAULT_PASS: gateway_pwd
+    ports:
+      - "15672:15672" # Management UI на хосте — удобнее, чем SSH-туннель в локальной разработке
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb --ignore-existing local/obratka-jobs;
+      exit 0;
+      "
+
+  seq:
+    image: datalust/seq:latest
+    environment:
+      ACCEPT_EULA: "Y"
+      SEQ_FIRSTRUN_NOAUTHENTICATION: "true"   # локально не паримся; на VPS — SEQ_FIRSTRUN_ADMINPASSWORDHASH (deploy-vps.md §16.1)
+    ports:
+      - "5342:80"   # Seq UI и ingestion на http://localhost:5342 (изнутри сети — http://seq:80)
+    volumes:
+      - seq-data:/data
+
+volumes:
+  processing-db-data:
+  minio-data:
+  seq-data:

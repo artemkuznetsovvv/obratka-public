@@ -1,0 +1,29 @@
+{
+  "task_id": "30000000-0000-0000-0000-000000000001",
+  "job_id": "11111111-2222-3333-4444-555555555555",
+  "source": "google",
+  "company_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "collected_at": "2026-04-01T12:00:00+00:00",
+  "reviews": [
+    {
+      "external_id": "ChdDSUhNMG9nS0VJQ0FnSURBcF9HekJB",
+      "text": "Great service and quick delivery!",
+      "date": "2026-03-29T20:14:00+00:00",
+      "stars": 5,
+      "branch_id": "e309d01c-c44b-4412-9455-3714ca056549",
+      "author_name": "John Smith",
+      "author_public_id": null,
+      "text_language": "en"
+    },
+    {
+      "external_id": "ChZDSUhNMG9nS0VJQ0FnSURJN3Z1OEpn",
+      "text": "Очень удобно, быстро всё нашли",
+      "date": "2026-03-15T11:00:00+00:00",
+      "stars": 5,
+      "branch_id": "e309d01c-c44b-4412-9455-3714ca056549",
+      "author_name": "Мария К.",
+      "author_public_id": null,
+      "text_language": "ru"
+    }
+  ]
+}
