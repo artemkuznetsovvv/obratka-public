@@ -197,7 +197,7 @@ curl --location 'https://gateway-dev.193.233.217.223.sslip.io/api/qa/jobs/<JOB_I
 
 ```bash
 curl --location 'https://gateway-dev.193.233.217.223.sslip.io/api/qa/analyses/<JOB_ID>/reviews?limit=5' \
-  --header 'X-Api-Key: ***REMOVED***'
+  --header 'X-Api-Key: <GATEWAY_API_KEY>'
 ```
 
 ---
