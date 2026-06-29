@@ -1,0 +1,32 @@
+{
+  "data": {
+    "reviews": [
+      {
+        "reviewId": "rev-004",
+        "businessId": "212641089354",
+        "author": {
+          "name": "Елена Козлова",
+          "publicId": "elk789"
+        },
+        "text": "Были проблемы с обслуживанием",
+        "textLanguage": "ru",
+        "rating": 2,
+        "updatedTime": "2025-02-20T14:00:00.000Z"
+      },
+      {
+        "reviewId": "rev-002",
+        "businessId": "212641089354",
+        "author": {
+          "name": "Мария Сидорова",
+          "publicId": "xyz789ghi012"
+        },
+        "text": "Нормально, но есть куда расти",
+        "textLanguage": "ru",
+        "rating": 3,
+        "updatedTime": "2025-03-28T09:30:00.000Z"
+      }
+    ],
+    "totalCount": 5,
+    "hasMore": false
+  }
+}

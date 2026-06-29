@@ -1,0 +1,33 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.dll
+*.exe
+*.pdb
+
+## IDE
+.vs/
+.vscode/
+.idea/
+*.swp
+*~
+
+## Claude
+.claude/
+
+## SQLite
+*.db
+*.db-shm
+*.db-wal
+/data/
+
+## OS
+Thumbs.db
+.DS_Store
+
+## Build
+publish/
+out/
