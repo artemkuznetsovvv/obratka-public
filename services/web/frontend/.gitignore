@@ -1,0 +1,13 @@
+# Local — duplicates root .gitignore but useful when frontend/ is opened standalone in an IDE.
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+*.log
+.env
+.env.local
+
+# OpenAPI client is committed; only ignore if devs prefer regen on each build.
+# (Comment out the line below to ignore generated client.)
+# src/api/generated/

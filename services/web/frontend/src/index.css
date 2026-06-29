@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Mapped to Obratka design tokens (DESIGN.md). HSL values for shadcn convention. */
+    --background: 220 14% 97%;       /* #F7F8FA page-bg */
+    --foreground: 220 39% 11%;       /* #111827 text-primary */
+
+    --card: 0 0% 100%;               /* #FFFFFF */
+    --card-foreground: 220 39% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 39% 11%;
+
+    --primary: 243 76% 59%;          /* #4F46E5 brand */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 14% 97%;
+    --secondary-foreground: 220 39% 11%;
+
+    --muted: 220 13% 95%;
+    --muted-foreground: 220 9% 46%;  /* #6B7280 text-secondary */
+
+    --accent: 226 100% 97%;          /* #EEF2FF state-active-bg */
+    --accent-foreground: 243 76% 59%;
+
+    --destructive: 0 84% 60%;        /* #EF4444 */
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 13% 91%;           /* #E5E7EB */
+    --input: 220 13% 91%;
+    --ring: 243 76% 59%;
+
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html, body, #root {
+    @apply h-full;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: 'rlig' 1, 'calc' 1;
+  }
+}
