@@ -1,0 +1,46 @@
+# ============================================================
+#  Секреты / локальный конфиг — НИКОГДА не коммитить
+# ============================================================
+.env
+.env.*
+*.env
+appsettings.Development.json
+appsettings.Local.json
+appsettings.*.local.json
+secrets.json
+*.pem
+*.key
+*.pfx
+*credentials*
+*-secret*
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# ---- .NET ----
+bin/
+obj/
+*.user
+*.suo
+.vs/
+TestResults/
+*.nupkg
+
+# ---- Node (если есть фронт) ----
+node_modules/
+.cache/
+
+# ---- ОС / редакторы ----
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
